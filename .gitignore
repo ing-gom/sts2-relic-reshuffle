@@ -1,0 +1,18 @@
+# Build artifacts
+bin/
+obj/
+.godot/
+*.pck
+*.lscache
+*.user
+
+# Machine-local build settings (GodotPath differs per machine)
+Directory.Build.props
+
+# solo-verify / coop-verify runtime outputs
+selftest.*
+
+# OS
+Thumbs.db
+.DS_Store
+__pycache__/

@@ -1,0 +1,19 @@
+<Project Sdk="Godot.NET.Sdk/4.5.1">
+    <Import Project="..\Sts2.ModKit\build\Sts2.ModKit.props" />
+
+    <PropertyGroup>
+        <RootNamespace>Sts2RelicReshuffle</RootNamespace>
+        <AssemblyName>Sts2RelicReshuffle</AssemblyName>
+    </PropertyGroup>
+
+    <!-- Self-tests compile ONLY in Debug — a Release build (the deploy) strips the test code and its
+         ArmIfRequested calls entirely, so a stale selftest flag can never hijack a run (the
+         Sts2NetWorth lesson). Same pattern as Sts2RelicForge / Sts2RelicTransmute. -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+        <DefineConstants>$(DefineConstants);RESHUFFLE_SELFTEST</DefineConstants>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+        <Compile Remove="Sts2RelicReshuffleCode/SoloTest.cs" />
+        <Compile Remove="Sts2RelicReshuffleCode/CoopTest.cs" />
+    </ItemGroup>
+</Project>
