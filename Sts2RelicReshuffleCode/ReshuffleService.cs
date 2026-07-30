@@ -316,6 +316,20 @@ internal static class ReshuffleService
         return result;
     }
 
+    /// <summary>
+    /// Test-only: perform one swap directly, bypassing eligibility and the pool.
+    ///
+    /// ★WHY THIS EXISTS. The stack carry-over inside <see cref="ApplySwap"/> is UNREACHABLE through
+    /// normal play with the current relic table: all three stackable relics are rarity None (Circlet,
+    /// DeprecatedRelic) or Ancient (YummyCookie), and a rarity-preserving swap needs a same-rarity
+    /// stackable peer that does not exist. So the branch would ship having never once executed, and the
+    /// promise "a stack is never lost" would rest on an accident of the data rather than on tested code.
+    /// This hook lets the self-test drive that branch on purpose, so a future game patch that adds a
+    /// stackable relic with a real rarity finds the path already verified instead of newly broken.
+    /// </summary>
+    internal static RelicModel? ForceSwapForTest(Player player, RelicModel source, RelicModel proto)
+        => ApplySwap(player, source, proto);
+
     /// <summary>Test-only view of the candidate pool for one rarity (the pool builder is private so the
     /// production surface stays small; the self-test needs it to construct an "owns everything" state).</summary>
     internal static List<RelicModel> TargetPoolForTest(Player player, RelicRarity rarity)

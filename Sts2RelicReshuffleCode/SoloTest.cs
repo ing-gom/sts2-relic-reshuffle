@@ -236,6 +236,10 @@ internal static class SoloTest
             bool reentry = CheckReentry(run);
             if (!reentry) ok = false;
 
+            // ── 12. the stack carry-over branch actually works ──────────────────────────────────
+            bool carried = CheckStackCarryOver(player);
+            if (!carried) ok = false;
+
             // ── 11. owning an entire rarity still reshuffles (runs LAST — it wrecks the inventory) ──
             bool collector = CheckOwnsEverything(player);
             if (!collector) ok = false;
@@ -377,6 +381,61 @@ internal static class SoloTest
             return sameSet && noDupes && allMoved;
         }
         catch (Exception e) { W("assert 11 owns-everything THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// Force a stackable → stackable swap and prove the accumulated count carries over.
+    ///
+    /// ★WHY IT HAS TO BE FORCED. Assert 7 only shows that a stack was not LOST, and it passes by taking
+    /// the "wasn't swapped" branch — CIRCLET is rarity None, so a rarity-preserving swap can never move
+    /// it. All three stackable relics in the game are rarity None or Ancient with no stackable
+    /// same-rarity peer, which makes the carry-over code unreachable in normal play. Left at that it
+    /// would ship never having executed once, and "a stack is never lost" would be a property of the
+    /// current relic table rather than of this code. So the swap is driven directly, past eligibility.
+    /// </summary>
+    private static bool CheckStackCarryOver(Player player)
+    {
+        try
+        {
+            var stackables = FlatModels().OfType<RelicModel>()
+                .Where(r => r.IsStackable && !r.HasUponPickupEffect)
+                .GroupBy(r => r.Id.Entry).Select(g => g.First())
+                .OrderBy(r => r.Id.Entry, StringComparer.Ordinal).ToList();
+            if (stackables.Count < 2)
+            {
+                W($"assert 12 stack carry-over: SKIPPED (need 2 stackable relics, found {stackables.Count})");
+                return true;
+            }
+
+            var sourceProto = stackables[0];
+            var targetProto = stackables[1];
+
+            // Put a real stack on the board: a fresh instance starts at 1, so bump it to 4.
+            foreach (var r in player.Relics.ToList())
+                if (r.Id.Entry == sourceProto.Id.Entry || r.Id.Entry == targetProto.Id.Entry)
+                    player.RemoveRelicInternal(r);
+            var live = sourceProto.ToMutable();
+            player.AddRelicInternal(live);
+            live.IncrementStackCount();
+            live.IncrementStackCount();
+            live.IncrementStackCount();
+            int before = live.StackCount;
+
+            var fresh = ReshuffleService.ForceSwapForTest(player, live, targetProto);
+            bool swapped = fresh != null && fresh.Id.Entry == targetProto.Id.Entry;
+            bool carried = swapped && fresh!.StackCount == before;
+            W($"assert 12 stack carry-over {sourceProto.Id.Entry}(x{before}) -> {targetProto.Id.Entry}: "
+              + $"swapped={swapped}, newStack={fresh?.StackCount ?? -1} (want {before}) = {carried} (want True)");
+
+            // Also confirm the game agrees — the relic the player now holds carries the count, not just
+            // the object we were handed back.
+            var held = player.Relics.FirstOrDefault(r => r.Id.Entry == targetProto.Id.Entry);
+            bool heldOk = held != null && held.StackCount == before;
+            W($"assert 12b inventory copy carries the stack: held={held?.StackCount ?? -1} = {heldOk} (want True)");
+
+            return carried && heldOk;
+        }
+        catch (Exception e) { W("assert 12 stack carry-over THREW: " + e.Message); return false; }
     }
 
     private static List<string> Fingerprint(RunManager run)
