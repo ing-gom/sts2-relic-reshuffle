@@ -57,6 +57,14 @@ internal static class CoopTest
     /// <summary>JOIN only: the newest descriptor observed while still on the pre-jump floor, i.e. this
     /// peer's view of the state the reshuffle was about to act on.</summary>
     private static string _beforeSeen = "(never observed)";
+
+    /// <summary>JOIN only: the button's visibility sampled while the fight is genuinely still running.
+    /// ★It CANNOT be sampled where the host samples its own. The join peer waits for the host's result
+    /// file, and the host writes that file immediately before issuing `win` — so by the time join looked,
+    /// the networked win had already ended the fight on this peer too (measured: combatEnded=1 with the
+    /// SAME CombatRoom, i.e. a genuine ending, not a stale event). Three "fixes" were aimed at a product
+    /// bug that did not exist; the test was reading after the fact.</summary>
+    private static bool? _joinDuringSample;
     private static string _step = "(not started)";
     private static DateTime _stepAt = DateTime.UtcNow;
 
@@ -227,6 +235,16 @@ internal static class CoopTest
                 // Keep the newest pre-jump view as our BEFORE: once the floor advances, the room change
                 // (and with it the reshuffle) has happened and this is no longer the pre-action state.
                 if (RunManager.Instance.State!.TotalFloor == startFloor) _beforeSeen = now;
+
+                // The floor moved: the reshuffle has landed and the fight is running. Sample the button
+                // HERE, well before the host's win can reach us.
+                if (_joinDuringSample == null && RunManager.Instance.State!.TotalFloor != startFloor)
+                {
+                    await Task.Delay(2500);   // let the deferred pulse fire
+                    _joinDuringSample = ButtonVisible();
+                    W($"  [diag] button sampled mid-fight = {(_joinDuringSample?.ToString() ?? "(not found)")}");
+                }
+
                 if (File.Exists(hostPath) && i >= 4) break;   // host finished and we have settled
             }
 
@@ -271,7 +289,8 @@ internal static class CoopTest
             bool verdict = converged && twoPlayers && setupAgreed;
             Write(verdict);   // bank it before the host's win pops reward screens here too
 
-            bool gating = await CheckButtonGating(RunManager.Instance!, me, issueWin: false);
+            bool gating = await CheckButtonGating(RunManager.Instance!, me, issueWin: false,
+                                                 preSampledDuring: _joinDuringSample);
             await Shot("03_after_win");
             Flush(verdict && gating);
         }
@@ -464,7 +483,8 @@ internal static class CoopTest
     /// networked <c>win</c> command kills every enemy, which produces a genuine victory and therefore
     /// fires the game's own CombatManager.CombatEnded, the exact signal the button listens to.
     /// </summary>
-    private static async Task<bool> CheckButtonGating(RunManager run, Player me, bool issueWin)
+    private static async Task<bool> CheckButtonGating(RunManager run, Player me, bool issueWin,
+                                                     bool? preSampledDuring = null)
     {
         // ★Diagnostics go in the RESULT FILE, not the log. Two instances write the same godot.log and
         // clobber each other's lines — the previous cycle's reshuffle log entries were simply gone, which
@@ -478,14 +498,17 @@ internal static class CoopTest
             W($"  [diag] patch trace: {CombatEntryPatch.Trace}");
             W($"  [diag] history trace: {ReshuffleHistory.Trace}");
             W($"  [diag] pulse trace: {NReshuffleSummaryButton.PulseTrace}, buttonsInTree={CountNamed("NReshuffleSummaryButton")}");
+            W($"  [diag] attach={NReshuffleSummaryButton.AttachCount} adopt={NReshuffleSummaryButton.AdoptCount}, {NReshuffleSummaryButton.InstanceState()}");
+            W($"  [diag] combatEnded={NReshuffleSummaryButton.CombatEndedCount}");
             if (st != null)
                 foreach (var p in st.Players)
                     W($"  [diag] player {p.NetId}: IsMe={SafeIsMe(p)}, netIdMatch={p.NetId == netId}");
         }
         catch (Exception e) { W("  [diag] failed: " + e.Message); }
 
-        bool? during = ButtonVisible();
-        W($"button during combat = {(during?.ToString() ?? "(not found)")} (want True)");
+        bool? during = preSampledDuring ?? ButtonVisible();
+        W($"button during combat = {(during?.ToString() ?? "(not found)")} (want True)"
+          + (preSampledDuring != null ? " [sampled mid-fight]" : ""));
 
         if (issueWin)
         {

@@ -59,6 +59,24 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
     /// button consults this (via <see cref="ReshuffleHistory.Current"/>) rather than starting hidden.</summary>
     private static bool _shownForFight;
 
+    /// <summary>Test-only: how many times a button was CREATED, and how many times an existing one was
+    /// adopted instead. On a co-op client the top bar is rebuilt, and knowing which happened is the
+    /// difference between "wrong node inspected" and "right node, wrong state".</summary>
+    internal static int AttachCount;
+    internal static int AdoptCount;
+
+    /// <summary>Test-only: how many CombatEnded events arrived.</summary>
+    internal static int CombatEndedCount;
+
+    /// <summary>Test-only snapshot of the cached instance's health.</summary>
+    internal static string InstanceState()
+    {
+        if (_instance == null) return "instance=null";
+        bool valid = GodotObject.IsInstanceValid(_instance);
+        bool inTree = valid && _instance.IsInsideTree();
+        return $"instance valid={valid} inTree={inTree} visible={(valid ? _instance.Visible.ToString() : "?")}";
+    }
+
     private NTopBar _bar = null!;
     private bool _positioned;   // anchor computed once, after the bar's layout settles
     private bool _inFlow;       // true when a BoxContainer lays us out (no manual anchor)
@@ -82,6 +100,7 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         if (host.GetNodeOrNull(nameof(NReshuffleSummaryButton)) is NReshuffleSummaryButton existing)
         {
             _instance = existing;
+            AdoptCount++;
             return;
         }
 
@@ -97,6 +116,7 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         else bar.AddChild(btn);
 
         _instance = btn;
+        AttachCount++;
         MainFile.Logger.Info($"[{MainFile.ModId}] summary button attached (host {host.GetType().Name}, inFlow {btn._inFlow}).");
     }
 
@@ -156,10 +176,18 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
 
     /// <summary>Hide the button, drop the record and close the panel when the fight is over. Wired to
     /// CombatManager.CombatEnded (see the class remark on why the button is combat-only).</summary>
-    private void OnCombatEnded(MegaCrit.Sts2.Core.Rooms.CombatRoom _)
+    private void OnCombatEnded(MegaCrit.Sts2.Core.Rooms.CombatRoom room)
     {
         try
         {
+            CombatEndedCount++;
+
+            // ★NO FILTERING HERE, and that is a measured conclusion rather than an omission. Two guards
+            // were tried — "ignore if a fight is still in progress" and "ignore an event for a different
+            // CombatRoom" — because the client's button kept reading hidden. Both were aimed at a bug
+            // that did not exist: the event was the genuine end of the right fight, and the test was
+            // simply sampling after the networked `win` had already reached this peer. Every CombatEnded
+            // that arrives is a real ending, so hide unconditionally.
             Visible = false;
             _shownForFight = false;
             if (NReshuffleSummaryPanel.IsOpen) NReshuffleSummaryPanel.Close();
@@ -190,7 +218,13 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
     /// outlived by a UI rebuild, and this feature is invisible when that happens.</summary>
     private static NReshuffleSummaryButton? Resolve()
     {
-        if (_instance != null && GodotObject.IsInstanceValid(_instance)) return _instance;
+        // ★IsInstanceValid IS NOT ENOUGH. It only says the object has not been freed — a node REMOVED
+        // from the scene tree still passes it. Writing Visible on such a ghost changes nothing on screen,
+        // which is exactly the symptom that survived three earlier fixes: the pulse reported success
+        // ("shown via typed lookup") while the button actually in the tree stayed hidden. Require that the
+        // cached node is still IN the tree, otherwise go find the live one.
+        if (_instance != null && GodotObject.IsInstanceValid(_instance) && _instance.IsInsideTree())
+            return _instance;
         try
         {
             if (Engine.GetMainLoop() is SceneTree tree)

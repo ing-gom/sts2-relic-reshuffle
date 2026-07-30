@@ -52,6 +52,7 @@ internal static class ReshuffleHistory
     /// <summary>Bumped whenever something is recorded, so callers can notice a change without polling.</summary>
     public static int Version { get; private set; }
 
+
     public static void Record(int floor, ulong netId, List<ReshuffleService.Swap> swaps)
     {
         if (swaps == null || swaps.Count == 0) return;
