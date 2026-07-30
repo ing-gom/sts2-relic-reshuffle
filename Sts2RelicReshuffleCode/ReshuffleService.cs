@@ -302,9 +302,29 @@ internal static class ReshuffleService
                 // bearing even though EventRelicPool is only read when a toggle asks for it. Without
                 // it, that one relic leaks in regardless of the setting.
                 if (proto.Rarity == RelicRarity.Event && !includeEvent) continue;
-                if (!RelicClassifier.IsValidTarget(proto)) continue;
-                if (!RelicClassifier.HasCombatValue(proto)) continue;
                 if (!proto.IsAllowed(runState)) continue;
+
+                // ★NO USEFULNESS FILTER. Earlier builds also dropped relics with no combat-side hook and
+                // relics whose payload fires at pickup — 26 of the 150 pooled-rarity relics. Both
+                // exclusions were wrong:
+                //
+                //   · "no combat value" assumed a shop/rest/map relic is dead weight in a fight. It is
+                //     not: a reshuffled relic is KEPT until the next fight, so it is in hand for the
+                //     shop, the campfire and the map in between. The filter contradicted the mod's own
+                //     persistence rule.
+                //   · "has a pickup effect" kept Strawberry and friends out to avoid an inert icon. They
+                //     ARE inert when granted (we add silently, so no payload fires — see below), but
+                //     that is a shuffle outcome, not a reason to shrink the pool. They are marked in the
+                //     tooltip instead (SpentRewardTooltipPatch) so the player is never misled.
+                //
+                // ★AND THE PAYLOAD MUST STAY UNFIRED. Running it here would be worse than an inert
+                // relic: several of these payloads open a card-selection screen (War Paint, Cauldron,
+                // Dolly's Mirror), which would pop a prompt in the middle of entering combat, and a
+                // permanent max-HP / gold gain would break the count-and-rarity invariant this mod is
+                // built on. Silent granting is the deliberate choice; assert 5 measures it every run.
+                //
+                // The only relics excluded are the ones the player named: Circlet (RelicRarity.None),
+                // starters, and Ancient / Event unless their setting is on.
 
                 if (!result.TryGetValue(proto.Rarity, out var bucket))
                     result[proto.Rarity] = bucket = new List<RelicModel>();

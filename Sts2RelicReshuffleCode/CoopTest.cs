@@ -165,6 +165,7 @@ internal static class CoopTest
             bool payload = await PayloadProbe(run, me);
 
             var beforeSnap = PerPlayer(run);
+            var beforeCounts = run.State!.Players.ToDictionary(p => p.NetId, OwnedCount);
             string before = Descriptor(run);
             W("HOST: BEFORE " + before);
             W("BEFORE " + before);   // the join peer diffs this too — a pre-action mismatch invalidates the test
@@ -182,6 +183,20 @@ internal static class CoopTest
             // Assert here as well: a run where nothing changed would "converge" trivially and report a
             // meaningless PASS. BOTH players must have been reshuffled — otherwise the two-NetId
             // derivation (different seeds per player) is untested, which is the whole point of a co-op run.
+            // ★COUNT INVARIANT, PER PLAYER. A rarity-preserving swap must never change how many relics
+            // someone holds, and co-op had no assert for it — the solo battery's assert 1 cannot see a
+            // second player. Companions are excluded because they are not the player's relics.
+            var counts = new List<string>();
+            bool countsHeld = true;
+            foreach (var p in run.State!.Players)
+            {
+                int now = OwnedCount(p);
+                int was = beforeCounts.TryGetValue(p.NetId, out int b) ? b : -1;
+                counts.Add($"{p.NetId}:{was}->{now}");
+                if (was != now) countsHeld = false;
+            }
+            W($"HOST assert: relic count unchanged per player = {countsHeld} (want True) — {string.Join(" ", counts)}");
+
             bool twoPlayers = run.State!.Players.Count >= 2;
             var unchanged = beforeSnap.Where(kv => afterSnap.TryGetValue(kv.Key, out var a) && a == kv.Value)
                                       .Select(kv => kv.Key).ToList();
@@ -191,7 +206,7 @@ internal static class CoopTest
               + (unchanged.Count > 0 ? $" — unchanged: {string.Join(",", unchanged)}" : ""));
 
             await Shot("02_final");
-            bool converged = twoPlayers && allChanged && payload;
+            bool converged = twoPlayers && allChanged && payload && countsHeld;
             Write(converged);   // bank it before the win, which pops reward screens
 
             bool gating = await CheckButtonGating(run, me, issueWin: true);
@@ -388,10 +403,30 @@ internal static class CoopTest
     private static int MaxHpOf(Player p) { try { return p.Creature.MaxHp; } catch { return -1; } }
     private static long GoldOf(Player p) { try { return p.Gold; } catch { return -1; } }
 
+    /// <summary>
+    /// The player's relics, with hidden Sts2RelicForge companions tagged.
+    ///
+    /// ★WITHOUT THE TAG THIS LINE LIES ABOUT THE COUNT INVARIANT. A companion is a donor instance
+    /// RelicForge grafts onto a forged host: it sits in <c>player.Relics</c> but the player does not own
+    /// it, and it can appear a second or two into a fight. Untagged, it reads as the reshuffle having
+    /// minted a relic out of nowhere — which cost a real investigation before the timeline showed it
+    /// arriving AFTER the swap. Tagged, the same line answers the question on sight.
+    /// </summary>
     private static string RelicsLine(Player p)
     {
-        try { return string.Join(",", p.Relics.Select(r => r.Id.Entry)); }
+        try
+        {
+            return string.Join(",", p.Relics.Select(r =>
+                RelicForgeBridge.IsCompanion(r) ? r.Id.Entry + "(companion)" : r.Id.Entry));
+        }
         catch { return "?"; }
+    }
+
+    /// <summary>Relics the player actually owns — companions excluded, so a count is meaningful.</summary>
+    private static int OwnedCount(Player p)
+    {
+        try { return p.Relics.Count(r => !RelicForgeBridge.IsCompanion(r)); }
+        catch { return -1; }
     }
 
     private static string? ReadHostLine(string path, string prefix)

@@ -62,10 +62,17 @@ internal static class SpentRewardTooltipPatch
             if (who == null) { LastSkip = "no player resolvable"; return; }
 
             int picked = SpentRewardLedger.TimesPicked(who, __instance.Id.Entry);
-            if (picked < 1) { LastSkip = "never picked this run"; return; }
+
+            // ★picked == 0 while HOLDING it means the reshuffle handed it over. Obtain writes a history
+            // entry; AddRelicInternal does not — so "in my inventory but never picked" is exactly the
+            // silently-granted case, and its payload never ran and never will. Marking it is the whole
+            // reason a pickup-effect relic can be in the pool at all: without this the player sees
+            // Strawberry appear and reasonably expects +7 max HP.
+            if (picked < 1 && !who.Relics.Any(r => r != null && r.Id.Entry == __instance.Id.Entry))
+            { LastSkip = "never picked and not held"; return; }
 
             bool held = who.Relics.Any(r => r != null && r.Id.Entry == __instance.Id.Entry);
-            if (held && picked < 2) { LastSkip = "held, picked once — this is the copy that paid out"; return; }
+            if (held && picked == 1) { LastSkip = "held, picked once — this is the copy that paid out"; return; }
 
             var wrapped = new LocString("gameplay_ui", "RELIC_USED_UP");
             wrapped.Add("description", __result.Description ?? "");

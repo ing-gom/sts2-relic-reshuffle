@@ -6,12 +6,17 @@ using MegaCrit.Sts2.Core.Models;
 namespace Sts2RelicReshuffle;
 
 /// <summary>
-/// Decides whether a relic prototype is worth handing someone for a single fight.
+/// Does a relic do anything during a fight?
 ///
-/// ★THE PROBLEM: rarity-preserving swaps keep the power LEVEL constant but not the power's RELEVANCE.
-/// Roll a rare slot onto a shop-discount or a rest-site relic and the player fights the elite a relic
-/// down. Measured against the decompiled pool: of the relics that survive the other filters, a
-/// meaningful slice have no combat-side hook at all. This class is what keeps them out.
+/// ★THIS NO LONGER FILTERS THE POOL, and that is a deliberate reversal. It used to: relics with no
+/// combat-side hook were kept out on the theory that rarity-preserving swaps hold the power LEVEL
+/// constant but not its RELEVANCE. That reasoning ignored the mod's own rule — a reshuffled relic is
+/// KEPT until the next fight, so a shop, rest-site or map relic is in hand for exactly the part of the
+/// run where it works. 26 of the 150 pooled-rarity relics were being withheld for no good reason.
+///
+/// What survives is the question itself, used by <see cref="SpentRewardTooltipPatch"/>: a relic whose
+/// only function fires at pickup really is inert once the reshuffle grants it silently, and the tooltip
+/// has to say so. "Has no combat hook AND its payload cannot run" is precisely "this icon does nothing".
 ///
 /// ★HOW: by reflection over which hooks the relic type actually OVERRIDES, not by a hardcoded id list —
 /// an id list silently rots on the next content patch, whereas a new relic that overrides a combat hook
@@ -87,17 +92,4 @@ internal static class RelicClassifier
         return result;
     }
 
-    /// <summary>Relics that must never be rolled INTO. Each exclusion is a distinct failure, not taste:
-    ///   · <c>HasUponPickupEffect</c> — its whole payload is dispensed at AfterObtained. We add relics
-    ///     through the silent internal path precisely so that never re-fires, which leaves the relic as
-    ///     an inert icon. (It also blocks the infinite-Strawberry exploit, for anyone who patches the
-    ///     obtain path back in.)
-    ///   · <c>SpawnsPets</c> / <c>AddsPet</c> — spawning a companion creature every combat entry, with
-    ///     no matching despawn, accumulates junk in the combat state.
-    /// Stackable relics are deliberately NOT excluded: a stackable source carries its accumulated count
-    /// onto a stackable target (see <see cref="ReshuffleService"/>), so nothing is lost or minted.</summary>
-    public static bool IsValidTarget(RelicModel proto)
-        => !proto.HasUponPickupEffect
-        && !proto.SpawnsPets
-        && !proto.AddsPet;
 }

@@ -185,13 +185,18 @@ internal static class SoloTest
               + (dupes.Count > 0 ? $" — duplicated: {string.Join(", ", dupes)}" : ""));
             if (dupes.Count > 0) ok = false;
 
-            // ── 4. no one-time reward relic was handed out ──────────────────────────────────────
-            var pickup = player.Relics.Where(r => r.HasUponPickupEffect)
-                                      .Select(r => r.Id.Entry)
-                                      .Where(e => swaps.Any(s => s.ToEntry == e)).ToList();
-            W($"assert 4 no one-time-reward relic rolled in: {pickup.Count == 0} (want True)"
-              + (pickup.Count > 0 ? $" — leaked: {string.Join(", ", pickup)}" : ""));
-            if (pickup.Count > 0) ok = false;
+            // ── 4. the pool is every relic of that rarity, with no usefulness curation ──────────
+            // ★INVERTED ON PURPOSE. This used to assert that no pickup-effect relic was ever handed out.
+            // The pool is now the player's stated rule — everything except Circlet, starters, and
+            // Ancient / Event unless opted in — so the thing worth pinning is that the withheld relics
+            // really are back. If a filter creeps in again this number drops and says so.
+            var pool = ReshuffleService.TargetPoolForTest(player, RelicRarity.Common);
+            int withPickup = pool.Count(r => r.HasUponPickupEffect);
+            int noCombat = pool.Count(r => !RelicClassifier.HasCombatValue(r));
+            bool uncurated = withPickup > 0 && noCombat > 0;
+            W($"assert 4 Common pool is uncurated: {pool.Count} relic(s), {withPickup} with a pickup "
+              + $"effect, {noCombat} with no combat hook = {uncurated} (want True)");
+            if (!uncurated) ok = false;
 
             // ── 5. nothing was granted on the side (proves AfterObtained never fired) ───────────
             bool wallet = player.Gold == goldBefore
@@ -248,6 +253,10 @@ internal static class SoloTest
             // ── 16. a one-time reward is paid once per run, however often the relic is obtained ──
             bool onceOnly = await CheckRepeatPickup(player);
             if (!onceOnly) ok = false;
+
+            // ── 18. a pickup-effect relic granted BY the reshuffle is inert, and says so ────────
+            bool inert = CheckInertGrant(player);
+            if (!inert) ok = false;
 
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
@@ -789,6 +798,54 @@ internal static class SoloTest
             return firstPaid && suppressed && covered;
         }
         catch (Exception e) { W("assert 17 unflagged payload THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// The reshuffle may now hand over a relic whose whole value is its pickup effect. Two things have to
+    /// be true at once for that to be acceptable, and neither is guaranteed by the asserts above.
+    ///
+    /// ★THE PAYLOAD MUST NOT FIRE. We grant through AddRelicInternal precisely so it cannot, but that is
+    /// an argument, not a measurement — and if it ever did fire, the reshuffle would be minting permanent
+    /// max HP every fight. Strawberry is the probe because its payload is +7 max HP and nothing else.
+    ///
+    /// ★AND THE PLAYER MUST BE TOLD. An inert Strawberry with a normal tooltip is a lie: it reads
+    /// "gain 7 max HP" while doing nothing. The mark is what makes including these relics honest rather
+    /// than merely permissible, and this is the only assert that covers the granted-but-never-picked
+    /// tooltip path.
+    /// </summary>
+    private static bool CheckInertGrant(Player player)
+    {
+        try
+        {
+            var target = FlatModels().OfType<RelicModel>()
+                .FirstOrDefault(r => r.Id.Entry == "STRAWBERRY" && r.HasUponPickupEffect);
+            if (target == null) { W("assert 18 inert grant: SKIPPED (STRAWBERRY not found)"); return true; }
+
+            var source = player.Relics.FirstOrDefault(r => r.Rarity != RelicRarity.Starter
+                                                        && r.Rarity != RelicRarity.None
+                                                        && r.Id.Entry != target.Id.Entry);
+            if (source == null) { W("assert 18 inert grant: SKIPPED (no swappable source)"); return true; }
+
+            int hp0 = player.Creature.MaxHp;
+            ReshuffleService.ForceSwapForTest(player, source, target);
+            var granted = player.Relics.FirstOrDefault(r => r.Id.Entry == target.Id.Entry);
+            if (granted == null) { W("assert 18 inert grant: SKIPPED (swap did not land)"); return true; }
+
+            bool noPayout = player.Creature.MaxHp == hp0;
+            W($"assert 18a reshuffle-granted {target.Id.Entry} paid nothing: maxHp {hp0}->"
+              + $"{player.Creature.MaxHp} = {noPayout} (want True)");
+
+            SpentRewardLedger.InvalidateForTest();
+            int picks = SpentRewardLedger.TimesPicked(player, target.Id.Entry);
+            string marker = SpentMarkerPrefix();
+            string desc = granted.HoverTip.Description ?? "";
+            bool marked = desc.StartsWith(marker, StringComparison.Ordinal);
+            W($"assert 18b it is marked inert in the tooltip: {marked} (want True) — picks={picks} "
+              + $"(want 0, i.e. granted not picked), gate: {SpentRewardTooltipPatch.LastSkip}");
+
+            return noPayout && marked;
+        }
+        catch (Exception e) { W("assert 18 inert grant THREW: " + e.Message); return false; }
     }
 
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
