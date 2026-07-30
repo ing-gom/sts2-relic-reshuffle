@@ -13,9 +13,11 @@ Rarity is preserved: a common becomes a different common, a rare becomes a diffe
 | **When** | On entering any combat room |
 | **What** | Every eligible relic, replaced 1:1 with a different relic of the same rarity |
 | **How long** | Until the next fight re-rolls them |
-| **Pinned** | Starter relics, Ancient relics, stackable relics, forged relics (each configurable except stackables) |
+| **Pinned** | Starter relics, relics you paid to re-forge or cleanse, and — unless you opt them in — Ancient and event relics |
 
-At the start of the fight a short panel lists what turned into what, then fades.
+A **⇄ button in the top bar** (next to map / deck / pause) opens the reshuffle log: every fight this run, newest first, showing which relic became which with both icons and names. The button pulses gold when a new reshuffle lands, so you notice without anything covering the board.
+
+An earlier version popped the list up automatically and faded it after a few seconds, anchored under the relic bar. That was dropped for two reasons: a message that disappears is no use if you looked away, and the relic bar *grows* through a run — it eventually wraps — so there is no stable place to anchor to. A list you open when you want has neither problem, and it can answer a question the pop-up never could: what did I have three fights ago?
 
 ## Why rarity-preserving
 
@@ -26,7 +28,7 @@ It also makes the rules self-describing: your relic count and rarity spread are 
 ## What it will never do
 
 - **Re-fire one-time rewards.** Relics whose whole payload is dispensed on pickup (Strawberry, Mango, Pandora's Box, …) are never handed out by a re-roll, and relics are swapped through the game's silent inventory path, so `AfterObtained` cannot fire. Your gold, max HP and potion slots are untouched by a reshuffle.
-- **Eat your stacks.** Stackable relics are never swapped, so a stack you built up outside combat survives.
+- **Eat your stacks.** If a stackable relic is ever swapped, the incoming relic inherits the count, so progress you built up outside combat is never lost.
 - **Delete another mod's relics.** Both sides of the swap are restricted to base-game relics.
 - **Hand you a relic you couldn't have earned.** The pool is your own — the shared pool plus your character's pool, filtered by your unlock state, exactly as the game builds it for real relic rewards. Relics that only come from the Ancient One or from events are never handed out, and neither are rarity-less relics such as Circlet.
 - **Give you two of the same relic.** A re-roll only ever picks something you don't already hold, and once you own an entire rarity it rotates those relics between your slots instead — so you keep reshuffling, still without duplicates.
@@ -46,13 +48,13 @@ Everything else is fixed, on purpose: a setting whose other position is simply w
 - Starter relics are always pinned — your starter *is* your character.
 - Relics you paid to re-forge or cleanse (Relic Forge) are always pinned.
 - The pool always excludes relics that do nothing in a fight, so a slot is never dead for a whole combat.
-- The readout always shows, anchored under your relic bar and fading on its own — no click, and it never covers the board.
+- The reshuffle log is always reachable from the top bar — nothing to switch on.
 
 There is also deliberately **no "how much gets re-rolled" slider**. "Some of your relics changed" makes you audit your own inventory every fight to work out which; "all of them changed" is a rule you read once.
 
 ## Languages
 
-Relic names in the readout come from the game's own localization, so they appear in whatever language you play in — all of them. The panel heading and the two settings ship English, Korean and Chinese, and fall back to English elsewhere (the same policy as the sister mods).
+Relic names in the log come from the game's own localization, so they appear in whatever language you play in — all of them. The panel heading and the two settings ship English, Korean and Chinese, and fall back to English elsewhere (the same policy as the sister mods).
 
 ## Multiplayer
 
@@ -67,7 +69,7 @@ Verified with a two-instance convergence test: both peers agreed on both players
 
 ## Compatibility
 
-- **[Relic Forge](https://github.com/ing-gom/sts2-relic-forge)** — forged relics are pinned by default, and hidden companion relics are never touched.
+- **[Relic Forge](https://github.com/ing-gom/sts2-relic-forge)** — relics you paid to re-forge or cleanse are pinned, and hidden companion relics are never touched. Note that a relic which merely picked up a prefix on obtain is *not* pinned: Relic Forge attaches one to almost everything, so treating that as "invested" froze whole inventories.
 - Relics added by other mods are left alone entirely.
 
 ## Building

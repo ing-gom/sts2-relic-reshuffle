@@ -16,4 +16,13 @@
         <Compile Remove="Sts2RelicReshuffleCode/SoloTest.cs" />
         <Compile Remove="Sts2RelicReshuffleCode/CoopTest.cs" />
     </ItemGroup>
+
+    <!-- The top-bar button's icon ships LOOSE next to the DLL rather than inside a .pck: the button
+         builds its texture with Image.LoadFromFile, so the art can be swapped without a rebuild and
+         the mod stays DLL-only (no pck to keep in sync). Same arrangement as Sts2RelicForge's icons. -->
+    <Target Name="CopyIconToModsFolder" AfterTargets="Sts2ModKit_CopyToModsFolder">
+        <Copy SourceFiles="$(MSBuildProjectDirectory)/reshuffle_icon.png"
+              DestinationFolder="$(Sts2ModOutputDir)"
+              Condition="Exists('$(MSBuildProjectDirectory)/reshuffle_icon.png')" />
+    </Target>
 </Project>

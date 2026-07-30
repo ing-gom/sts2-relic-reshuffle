@@ -117,9 +117,13 @@ internal static class CombatEntryPatch
                 $"[{(HostReshuffleConfig.UseHost ? "host cfg" : "local cfg")}: {HostReshuffleConfig.Describe()}]: " +
                 string.Join(", ", swaps.ConvertAll(s => s.ToString())));
 
-            // Only the local player's swaps go on screen. In co-op an ally's re-roll is their
-            // business, and both lists at once would bury the one the player has to act on.
-            if (IsLocal(player)) ShowBanner(swaps);
+            // Only the local player's swaps are recorded for the log. In co-op an ally's re-roll is
+            // their business, and interleaving both would bury the one the player has to act on.
+            if (IsLocal(player))
+            {
+                ReshuffleHistory.Record(runState, runState.TotalFloor, swaps);
+                NReshuffleSummaryButton.Pulse();
+            }
         }
     }
 
@@ -136,28 +140,4 @@ internal static class CombatEntryPatch
         catch { return true; }   // single-player: the only player there is
     }
 
-    /// <summary>
-    /// Hand the swap list to the combat-start banner — but not yet.
-    ///
-    /// ★THE DELAY IS THE POINT. This prefix runs before <c>SetUpCombat</c>, so at this instant the combat
-    /// scene does not exist and the screen is still mid-transition; a panel shown now would be built into
-    /// the outgoing room and either vanish or flash behind the fade. Waiting lets the fight render first,
-    /// so the readout appears over the board the player is about to look at.
-    /// </summary>
-    private static void ShowBanner(System.Collections.Generic.List<ReshuffleService.Swap> swaps)
-    {
-        try
-        {
-            var banner = MainFile.Banner;
-            if (banner == null) return;
-            if (Engine.GetMainLoop() is not SceneTree tree) return;
-
-            var timer = tree.CreateTimer(1.6, processAlways: true);
-            timer.Timeout += () => banner.ShowSwaps(swaps.ConvertAll(s => (s.From, s.To)));
-        }
-        catch (Exception e)
-        {
-            MainFile.Logger.Warn($"[{MainFile.ModId}] banner scheduling failed: {e.Message}");
-        }
-    }
 }

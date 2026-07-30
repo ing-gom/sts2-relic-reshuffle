@@ -9,7 +9,8 @@ namespace Sts2RelicReshuffle;
 
 /// <summary>
 /// Entry point. ModBootstrap.Run does harmony.PatchAll(assembly), which installs the combat-entry
-/// re-roll (<see cref="CombatEntryPatch"/>) and the co-op config broadcast
+/// re-roll (<see cref="CombatEntryPatch"/>), the top-bar log button
+/// (<see cref="ReshuffleSummaryButtonPatch"/>) and the co-op config broadcast
 /// (<see cref="RoomEnterConfigBroadcastPatch"/>), then we register the ModConfig entries.
 /// </summary>
 [ModInitializer(nameof(Initialize))]
@@ -20,10 +21,6 @@ public class MainFile
     private const string KeyIncludeAncient = "includeAncient";
     private const string KeyIncludeEvent = "includeEvent";
 
-    /// <summary>The combat-start readout, mounted once on the SceneTree root so it outlives room changes.
-    /// Null until the scene tree exists (and in headless test runs).</summary>
-    public static ReshuffleBanner? Banner { get; private set; }
-
     public static readonly MegaCrit.Sts2.Core.Logging.Logger Logger
         = ModBootstrap.CreateLogger(ModId);
 
@@ -33,9 +30,8 @@ public class MainFile
             Logger.Info($"[{ModId}] relic reshuffle active.");
             if (Engine.GetMainLoop() is not SceneTree tree) return;
 
-            Banner = new ReshuffleBanner { Name = $"{ModId}_Banner" };
-            tree.Root.CallDeferred(Node.MethodName.AddChild, Banner);
-
+            // The reshuffle log lives behind a top-bar button (ReshuffleSummaryButtonPatch attaches it
+            // from NTopBar._Ready), so there is nothing to mount here.
             // Defer so ModConfig has finished its own Initialize before we Register().
             tree.CreateTimer(0.0).Timeout += RegisterConfig;
 #if RESHUFFLE_SELFTEST

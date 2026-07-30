@@ -228,8 +228,8 @@ internal static class SoloTest
             bool det = await CheckDeterminism(player, before);
             if (!det) ok = false;
 
-            // ── 9. the combat-start banner actually renders ─────────────────────────────────────
-            bool ui = await CheckBanner(swaps);
+            // ── 9. the reshuffle log actually renders ───────────────────────────────────────────
+            bool ui = await CheckPanel(swaps);
             if (!ui) ok = false;
 
             // ── 10. re-entering the same combat must NOT re-roll ────────────────────────────────
@@ -379,39 +379,13 @@ internal static class SoloTest
         catch (Exception e) { W("assert 11 owns-everything THREW: " + e.Message); return false; }
     }
 
-    /// <summary>Diagnostic: what the relic-bar anchor is actually looking at. The first attempt anchored
-    /// to NRun.GlobalUi.RelicInventory and landed the panel mid-screen, which means that Control is not
-    /// the icon strip it looks like. Dump its rect and its children's so the anchor can target the right
-    /// node instead of being guessed at.</summary>
-    private static void DumpRelicBar()
-    {
-        try
-        {
-            var inv = MegaCrit.Sts2.Core.Nodes.NRun.Instance?.GlobalUi?.RelicInventory;
-            if (inv == null) { W("  [anchor] RelicInventory is null"); return; }
-            W($"  [anchor] RelicInventory type={inv.GetType().Name}"
-              + (inv is Control c ? $" rect={c.GetGlobalRect()} visible={c.Visible}" : " (not a Control)"));
-            if (inv is Node n)
-            {
-                int i = 0;
-                foreach (var child in n.GetChildren())
-                {
-                    string r = child is Control cc ? $"{cc.GetGlobalRect()} vis={cc.Visible}" : "(non-Control)";
-                    W($"    [anchor] child[{i++}] {child.GetType().Name} {child.Name} {r}");
-                    if (i >= 8) break;
-                }
-            }
-        }
-        catch (Exception e) { W("  [anchor] dump failed: " + e.Message); }
-    }
-
     private static List<string> Fingerprint(RunManager run)
         => run.State!.Players
               .Select(p => $"{p.NetId}=[{string.Join(",", p.Relics.Select(r => r.Id.Entry))}]")
               .ToList();
 
     /// <summary>
-    /// Drive the combat-start banner and prove it renders. This test never enters a real fight (it calls
+    /// Open the reshuffle log and prove it renders. This test never enters a real fight (it calls
     /// Reroll directly), so the panel has to be shown by hand — and it must be, because assert 1-8 would
     /// all pass with the UI completely broken. Checks three things a screenshot alone cannot: the panel
     /// built one row per swap, it is on screen, and nothing inside it paints outside it.
@@ -421,27 +395,33 @@ internal static class SoloTest
     /// render huge and spill over the panel while every Control.Size still reads correct. Comparing the
     /// panel's own rect to the union of its descendants' rects is what catches that.
     /// </summary>
-    private static async Task<bool> CheckBanner(List<ReshuffleService.Swap> swaps)
+    private static async Task<bool> CheckPanel(List<ReshuffleService.Swap> swaps)
     {
         try
         {
-            var banner = MainFile.Banner;
-            if (banner == null) { W("assert 9 banner: FAIL — banner was never mounted"); return false; }
+            // Seed the log the way a real fight would, then open the panel from code (the top-bar
+            // button only exists inside a run's UI, and the test drives the panel, not the button).
+            ReshuffleHistory.ResetForTest();
+            ReshuffleHistory.Record(RunManager.Instance!.State!, RunManager.Instance!.State!.TotalFloor, swaps);
 
-            DumpRelicBar();   // diagnostic: what the anchor is actually measuring
+            if (NReshuffleSummaryPanel.IsOpen) NReshuffleSummaryPanel.Close();
+            NReshuffleSummaryPanel.Toggle();
+            await Task.Delay(900);   // let the layout resolve
 
-            banner.ShowSwaps(swaps.ConvertAll(s => (s.From, s.To)));
-            await Task.Delay(900);   // let the fade-in tween settle and the layout resolve
+            var frame = NReshuffleSummaryPanel.FrameForTest;
+            if (frame == null) { W("assert 9 panel: FAIL — panel frame not built"); return false; }
 
-            int rows = banner.RowCountForTest;
+            var texts = NReshuffleSummaryPanel.TextsForTest();
+            int rows = 0;
+            foreach (var s2 in swaps) if (texts.Contains(s2.To.Title?.GetFormattedText() ?? "")) rows++;
             bool rowsOk = rows == swaps.Count;
-            W($"assert 9a banner rows: {rows} for {swaps.Count} swap(s) = {rowsOk} (want True)");
+            W($"assert 9a panel lists {rows} of {swaps.Count} swap(s) = {rowsOk} (want True)");
 
-            bool visible = banner.Visible && (banner.PanelForTest?.Visible ?? false);
-            W($"assert 9b banner visible: {visible} (want True)");
+            bool visible = NReshuffleSummaryPanel.IsOpen && frame.Visible;
+            W($"assert 9b panel open and visible: {visible} (want True)");
 
-            Rect2 panel = banner.PanelForTest?.GetGlobalRect() ?? new Rect2();
-            Rect2 painted = banner.RenderedRectForTest();
+            Rect2 panel = frame.GetGlobalRect();
+            Rect2 painted = NReshuffleSummaryPanel.RenderedRectForTest();
             // Allow a pixel of rounding slack; anything larger means a child escaped the container.
             bool contained = panel.Size.X > 0 && panel.Size.Y > 0
                           && painted.Position.X >= panel.Position.X - 1 && painted.Position.Y >= panel.Position.Y - 1
@@ -452,7 +432,6 @@ internal static class SoloTest
             // "LocString table relics entry AKABEKO.title" on every row — LocString.ToString() is a debug
             // description, and 9a/9b/9c all passed anyway because the layout was fine. A key that leaked
             // to the screen always contains "LocString" or the raw UPPER_SNAKE entry, so check for both.
-            var texts = banner.RowTextsForTest();
             var bad = texts.Where(t => string.IsNullOrWhiteSpace(t)
                                     || t.Contains("LocString", StringComparison.Ordinal)
                                     || t.Contains(".title", StringComparison.Ordinal)).ToList();
@@ -460,10 +439,12 @@ internal static class SoloTest
             W($"assert 9d relic names resolved: {readable} (want True) — [{string.Join(" | ", texts)}]"
               + (bad.Count > 0 ? $" ★unresolved: {string.Join(", ", bad)}" : ""));
 
-            await Shot("3_banner");   // visual evidence the readout renders with real icons and names
-            return rowsOk && visible && contained && readable;
+            await Shot("3_panel");   // visual evidence the log renders with real icons and names
+            bool okAll = rowsOk && visible && contained && readable;
+            NReshuffleSummaryPanel.Close();
+            return okAll;
         }
-        catch (Exception e) { W("assert 9 banner THREW: " + e.Message); return false; }
+        catch (Exception e) { W("assert 9 panel THREW: " + e.Message); return false; }
     }
 
     /// <summary>Rebuild the given relic inventory exactly (same ids, same order). False = could not, and
