@@ -33,6 +33,14 @@ internal static class ReshuffleSummaryButtonPatch
 /// <summary>
 /// The top-bar toggle button. Pulses gold when a new reshuffle is recorded, so the player learns
 /// something changed without a panel covering the board.
+///
+/// ★VISIBLE ONLY DURING A FIGHT. It has nothing to say anywhere else: the log describes the reshuffle
+/// that produced the relics you are fighting with, and on the map or in a shop that reshuffle is over.
+/// Left permanently visible it also kept offering the PREVIOUS fight's list, which is worse than
+/// offering nothing. So it is hidden by default, shown when a reshuffle is recorded, and hidden again on
+/// the game's own <c>CombatManager.CombatEnded</c> event — the same signal the native combat UI uses,
+/// rather than a Harmony patch of our own.
+///
 /// Pure local UI — no commands, no run-state writes → co-op safe.
 /// </summary>
 internal sealed partial class NReshuffleSummaryButton : TextureButton
@@ -59,7 +67,8 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         var host = target is BoxContainer ? target : bar;
         if (host.GetNodeOrNull(nameof(NReshuffleSummaryButton)) != null) return;   // already attached
 
-        var btn = new NReshuffleSummaryButton { _bar = bar, Name = nameof(NReshuffleSummaryButton) };
+        // Hidden until a fight actually reshuffles something.
+        var btn = new NReshuffleSummaryButton { _bar = bar, Name = nameof(NReshuffleSummaryButton), Visible = false };
         if (host is BoxContainer box)
         {
             var slot = parent is Container ? parent : deck;
@@ -73,14 +82,18 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         MainFile.Logger.Info($"[{MainFile.ModId}] summary button attached (host {host.GetType().Name}, inFlow {btn._inFlow}).");
     }
 
-    /// <summary>Flash the button gold. Called when a reshuffle is recorded — event-driven on purpose, so
-    /// nothing has to tick every frame just to notice a change ([[feedback_perf_guard]]).</summary>
+    /// <summary>Reveal the button and flash it gold. Called when a reshuffle is recorded — event-driven
+    /// on purpose, so nothing has to tick every frame just to notice a change
+    /// ([[feedback_perf_guard]]).</summary>
     public static void Pulse()
     {
         var btn = _instance;
         if (btn == null || !GodotObject.IsInstanceValid(btn)) return;
         try
         {
+            btn.Visible = true;
+            btn.SubscribeCombatEnd();
+
             var tween = btn.CreateTween();
             tween.SetLoops(3);
             tween.TweenProperty(btn, "modulate", new Color(1f, 0.86f, 0.35f), 0.35f);
@@ -88,6 +101,37 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         }
         catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] summary pulse failed: {e.Message}"); }
     }
+
+    /// <summary>Hide the button, drop the record and close the panel when the fight is over. Wired to
+    /// CombatManager.CombatEnded (see the class remark on why the button is combat-only).</summary>
+    private void OnCombatEnded(MegaCrit.Sts2.Core.Rooms.CombatRoom _)
+    {
+        try
+        {
+            Visible = false;
+            ReshuffleHistory.Clear();
+            if (NReshuffleSummaryPanel.IsOpen) NReshuffleSummaryPanel.Close();
+        }
+        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] summary hide-on-combat-end failed: {e.Message}"); }
+    }
+
+    /// <summary>Subscribe once. Deferred to the first Pulse rather than done in _Ready: the top bar is
+    /// built before a combat exists, so CombatManager.Instance can still be null there — by the time a
+    /// reshuffle is recorded it certainly is not.</summary>
+    private void SubscribeCombatEnd()
+    {
+        if (_subscribed) return;
+        try
+        {
+            var cm = MegaCrit.Sts2.Core.Combat.CombatManager.Instance;
+            if (cm == null) return;
+            cm.CombatEnded += OnCombatEnded;
+            _subscribed = true;
+        }
+        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] CombatEnded subscribe failed: {e.Message}"); }
+    }
+
+    private bool _subscribed;
 
     public override void _Ready()
     {

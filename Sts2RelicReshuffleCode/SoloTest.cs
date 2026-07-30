@@ -103,6 +103,10 @@ internal static class SoloTest
             var player = run.State!.Players.First();
             W($"run started: {player.Character?.Id.Entry}, floor {run.State.TotalFloor}");
             W($"target pool: {ReshuffleService.DescribePool(player)}");
+            // Sample the button BEFORE anything reshuffles. Asserting this later is worthless: assert 10
+            // calls the patch entry point, which records and pulses, so by then the button is legitimately
+            // visible and the check would fail for a reason that is not a bug.
+            _buttonHiddenAtStart = ButtonHidden();
             await Shot("1_run");
 
             // ── SETUP ────────────────────────────────────────────────────────────────────────────
@@ -235,6 +239,10 @@ internal static class SoloTest
             // ── 10. re-entering the same combat must NOT re-roll ────────────────────────────────
             bool reentry = CheckReentry(run);
             if (!reentry) ok = false;
+
+            // ── 13. the top-bar button is hidden until a reshuffle happens ──────────────────────
+            bool btn = CheckButtonVisibility();
+            if (!btn) ok = false;
 
             // ── 12. the stack carry-over branch actually works ──────────────────────────────────
             bool carried = CheckStackCarryOver(player);
@@ -436,6 +444,66 @@ internal static class SoloTest
             return carried && heldOk;
         }
         catch (Exception e) { W("assert 12 stack carry-over THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// The top-bar log button must be attached but HIDDEN outside a fight, and appear when a reshuffle
+    /// is recorded — it has nothing to say on the map or in a shop, and left visible it kept offering
+    /// the previous fight's list.
+    ///
+    /// ⚠️SCOPE: this measures the SHOW path only. Hiding is wired to the game's own
+    /// CombatManager.CombatEnded event, which needs a real fight to fire — this battery never enters
+    /// one (it drives Reroll directly), so that half is verified by construction, not by measurement.
+    /// </summary>
+    private static bool CheckButtonVisibility()
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) { W("assert 13 button: SKIPPED (no scene tree)"); return true; }
+            var node = FindByName(tree.Root, "NReshuffleSummaryButton");
+            if (node is not Control button)
+            {
+                // The top bar only exists inside a run's UI; if it hasn't built yet there is nothing to
+                // assert rather than something to fail.
+                W("assert 13 button: SKIPPED (top-bar button not attached yet)");
+                return true;
+            }
+
+            bool hiddenFirst = _buttonHiddenAtStart ?? true;
+            W($"assert 13a button hidden before any reshuffle: {hiddenFirst} (want True)"
+              + (_buttonHiddenAtStart == null ? " [sampled: button not attached at run start]" : ""));
+
+            NReshuffleSummaryButton.Pulse();
+            bool shown = button.Visible;
+            W($"assert 13b button shown after a reshuffle is recorded: {shown} (want True)");
+
+            return hiddenFirst && shown;
+        }
+        catch (Exception e) { W("assert 13 button THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>True/false if the button exists, null if the top bar hasn't built it yet.</summary>
+    private static bool? ButtonHidden()
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) return null;
+            return FindByName(tree.Root, "NReshuffleSummaryButton") is Control c ? !c.Visible : (bool?)null;
+        }
+        catch { return null; }
+    }
+
+    private static bool? _buttonHiddenAtStart;
+
+    private static Node? FindByName(Node n, string name)
+    {
+        if (n.Name == name) return n;
+        foreach (var c in n.GetChildren())
+        {
+            var r = FindByName(c, name);
+            if (r != null) return r;
+        }
+        return null;
     }
 
     private static List<string> Fingerprint(RunManager run)

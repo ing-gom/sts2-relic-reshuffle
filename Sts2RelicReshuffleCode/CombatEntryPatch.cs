@@ -122,6 +122,8 @@ internal static class CombatEntryPatch
             if (IsLocal(player))
             {
                 ReshuffleHistory.Record(runState, runState.TotalFloor, swaps);
+                // Reveals the top-bar button and flashes it. It stays hidden outside a fight — see
+                // NReshuffleSummaryButton for why the log is combat-only.
                 NReshuffleSummaryButton.Pulse();
             }
         }
