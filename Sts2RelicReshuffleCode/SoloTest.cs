@@ -270,6 +270,10 @@ internal static class SoloTest
             bool restart = CheckRestartInteraction(player);
             if (!restart) ok = false;
 
+            // ── 22. a wax (candle) relic is never reshuffled ────────────────────────────────────
+            bool wax = CheckWaxPinned(player, run);
+            if (!wax) ok = false;
+
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
             if (!offers) ok = false;
@@ -1090,6 +1094,61 @@ internal static class SoloTest
             return untouched && restoredOk && reapplied;
         }
         catch (Exception e) { W("assert 21 restart THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// Toy Box's wax relics stay exactly where they are.
+    ///
+    /// ★WHAT WAX IS. Toy Box hands over four relics pulled from the bag with <c>IsWax</c> set, then melts
+    /// one every three fights (<c>FirstOrDefault(IsWax &amp;&amp; !IsMelted)</c>). They are relics you are
+    /// going to lose on a schedule, and both flags are per-instance saved state.
+    ///
+    /// ★WHY IT MUST NOT BE RESHUFFLED. Swapping a live wax relic for a fresh instance would drop the flag
+    /// and hand the player a PERMANENT relic in place of a doomed one — a free relic every three fights,
+    /// the same laundering shape as the re-buy loops. Swapping a melted one would resurrect a corpse into
+    /// a working relic. Keeping wax pinned is a deliberate choice (the alternative, carrying the flag
+    /// across the swap, was considered and rejected: it buys variety in slots the player is about to lose
+    /// and pays for it with an exploit that only shows up if the carry silently fails).
+    ///
+    /// ★AND NOTHING ELSE COVERED IT. The rule was one line in IsSwappableSource with no test at all, so
+    /// deleting it would have gone unnoticed by all 45 other asserts while quietly minting relics.
+    /// </summary>
+    private static bool CheckWaxPinned(Player player, RunManager run)
+    {
+        RelicModel? victim = null;
+        try
+        {
+            victim = player.Relics.FirstOrDefault(r => r.Rarity != RelicRarity.Starter
+                                                    && r.Rarity != RelicRarity.None);
+            if (victim == null) { W("assert 22 wax pinned: SKIPPED (no ordinary relic to mark)"); return true; }
+
+            victim.IsWax = true;
+            bool waxRefused = !ReshuffleService.IsSwappableSource(victim, player);
+            W($"assert 22a a wax relic is not swappable ({victim.Id.Entry}): {waxRefused} (want True)");
+
+            // End to end, not just the predicate: a rule that holds in isolation but is bypassed by the
+            // caller would still mint relics.
+            string entry = victim.Id.Entry;
+            CombatEntryPatch.ResetGuardForTest();
+            CombatEntryPatch.ReshuffleOnce(run.State!);
+            var after = player.Relics.FirstOrDefault(r => r.Id.Entry == entry);
+            bool survived = after != null && after.IsWax;
+            W($"assert 22b it survives a real re-roll still waxed: {survived} (want True)"
+              + (after == null ? " — the relic is GONE, i.e. it was swapped away" : ""));
+
+            // A melted relic must be refused too, or a corpse could be laundered into a live relic.
+            victim.IsMelted = true;
+            bool meltedRefused = !ReshuffleService.IsSwappableSource(victim, player);
+            W($"assert 22c a melted relic is not swappable: {meltedRefused} (want True)");
+
+            return waxRefused && survived && meltedRefused;
+        }
+        catch (Exception e) { W("assert 22 wax pinned THREW: " + e.Message); return false; }
+        finally
+        {
+            // Leave the inventory as we found it — assert 11 counts relics after this.
+            try { if (victim != null) { victim.IsMelted = false; victim.IsWax = false; } } catch { }
+        }
     }
 
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
