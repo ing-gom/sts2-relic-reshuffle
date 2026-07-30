@@ -20,11 +20,13 @@ namespace Sts2RelicReshuffle;
 /// So the pool is redefined to mean [i]not currently owned[/i] rather than [i]never obtained[/i]. Combined
 /// with the offer-time filter (<see cref="RelicOfferFilterPatch"/>) the bag converges on exactly that.
 ///
-/// ★ONE-TIME REWARD RELICS ARE NEVER RETURNED, and this is the important carve-out. Relics whose whole
-/// payload is dispensed at pickup (Strawberry, Mango, Pandora's Box…) already paid out. Returning one to
-/// the pool would let a player collect the reward, have the reshuffle take the relic away, buy it again,
-/// and collect the reward a second time — an unbounded max-HP / gold / potion loop. Their reward is spent,
-/// so they stay out.
+/// ★ONE-TIME REWARD RELICS COME BACK TOO — the exploit is closed at the payout, not at the pool. Relics
+/// whose whole payload is dispensed at pickup (Strawberry, Mango, Pandora's Box…) were held out of the
+/// pool at first, because collecting the reward, letting the reshuffle take the relic, buying it back and
+/// collecting again is an unbounded max-HP / gold / potion loop. But holding them out puts an exception
+/// back into the rule this class exists to state, and it silently shrinks the pool again. So they are
+/// returned like everything else and <see cref="RepeatPickupPatch"/> suppresses the second payout, with
+/// <see cref="SpentRewardTooltipPatch"/> marking the relic so the offer is not a gold trap.
 ///
 /// ★REFLECTION, GUARDED. RelicGrabBag exposes Populate / Remove / MoveToFallback but no Add, so the
 /// rarity deques have to be reached directly. Every failure degrades to "don't return it" — the previous
@@ -63,7 +65,9 @@ internal static class RelicPoolReturn
         try
         {
             if (relic == null) return;
-            if (relic.HasUponPickupEffect) return;      // its reward is already spent — must not be re-bought
+            // Pet relics stay out. Unlike a one-time reward, a pet payout has no "already paid" state to
+            // read — re-obtaining one spawns another creature, and nothing about the run records that the
+            // first one exists. Keeping them out of the pool is the only guard available.
             if (relic.SpawnsPets || relic.AddsPet) return;
 
             object bag = player.RelicGrabBag;

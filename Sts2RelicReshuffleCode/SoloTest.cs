@@ -10,6 +10,7 @@ using MegaCrit.Sts2.Core.Commands;          // RelicCmd
 using MegaCrit.Sts2.Core.Entities.Players;  // Player
 using MegaCrit.Sts2.Core.Entities.Relics;   // RelicRarity
 using MegaCrit.Sts2.Core.Helpers;           // TaskHelper
+using MegaCrit.Sts2.Core.Localization;      // LocString
 using MegaCrit.Sts2.Core.Models;            // ModelDb, RelicModel, ActModel, ModifierModel
 using MegaCrit.Sts2.Core.Nodes;             // NGame
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;   // NMainMenu (run-start readiness gate)
@@ -243,6 +244,10 @@ internal static class SoloTest
             // ── 15. a relic the reshuffle took away returns to the draw pool ────────────────────
             bool returned = await CheckPoolReturn(player);
             if (!returned) ok = false;
+
+            // ── 16. a one-time reward is paid once per run, however often the relic is obtained ──
+            bool onceOnly = await CheckRepeatPickup(player);
+            if (!onceOnly) ok = false;
 
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
@@ -600,11 +605,12 @@ internal static class SoloTest
             bool afterIn = RelicPoolReturn.IsInPool(player, proto) == true;
             W($"assert 15b swapped-away relic returned to the pool: {afterIn} (want True)");
 
-            // The carve-out: a one-time reward relic must stay out even after being swapped away.
+            // A one-time reward relic returns like everything else — the exploit is closed at the payout
+            // (assert 16), not by holding the relic out of the pool.
             var oneTime = FlatModels().OfType<RelicModel>()
                 .FirstOrDefault(r => r.HasUponPickupEffect && r.Rarity == RelicRarity.Common);
-            bool carveOk = true;
-            if (oneTime == null) W("assert 15c one-time carve-out: SKIPPED (no Common pickup-effect relic)");
+            bool oneTimeOk = true;
+            if (oneTime == null) W("assert 15c one-time return: SKIPPED (no Common pickup-effect relic)");
             else
             {
                 // ★It must be OUT of the pool first, or this proves nothing: a pickup-effect relic that
@@ -615,17 +621,151 @@ internal static class SoloTest
 
                 var live = oneTime.ToMutable();
                 player.AddRelicInternal(live);                       // silent: its payload never fires
-                RelicPoolReturn.TryReturn(player, live);              // must be REFUSED
-                bool stillOut = RelicPoolReturn.IsInPool(player, oneTime) == false;
-                carveOk = clearedFirst && stillOut;
-                W($"assert 15c one-time reward relic NOT returned ({oneTime.Id.Entry}): "
-                  + $"clearedFirst={clearedFirst}, stillOut={stillOut} = {carveOk} (want True)");
+                RelicPoolReturn.TryReturn(player, live);
+                bool backIn = RelicPoolReturn.IsInPool(player, oneTime) == true;
+                oneTimeOk = clearedFirst && backIn;
+                W($"assert 15c one-time reward relic returns to the pool ({oneTime.Id.Entry}): "
+                  + $"clearedFirst={clearedFirst}, backIn={backIn} = {oneTimeOk} (want True)");
                 player.RemoveRelicInternal(live);
             }
 
-            return beforeIn == false && afterIn && carveOk;
+            // A pet relic still stays out — there is no "already spawned" state to read, so the pool is
+            // the only place to stop it.
+            var pet = FlatModels().OfType<RelicModel>().FirstOrDefault(r => r.SpawnsPets || r.AddsPet);
+            bool petOk = true;
+            if (pet == null) W("assert 15d pet carve-out: SKIPPED (no pet relic)");
+            else
+            {
+                player.RelicGrabBag.Remove(pet);
+                bool petCleared = RelicPoolReturn.IsInPool(player, pet) == false;
+                RelicPoolReturn.TryReturn(player, pet.ToMutable());   // must be REFUSED
+                bool petOut = RelicPoolReturn.IsInPool(player, pet) == false;
+                petOk = petCleared && petOut;
+                W($"assert 15d pet relic NOT returned ({pet.Id.Entry}): "
+                  + $"clearedFirst={petCleared}, stillOut={petOut} = {petOk} (want True)");
+            }
+
+            return beforeIn == false && afterIn && oneTimeOk && petOk;
         }
         catch (Exception e) { W("assert 15 pool return THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// Obtaining a one-time reward relic a second time must hand over nothing, and the relic must say so.
+    ///
+    /// ★THIS IS THE ONE THAT MAKES POOL RETURN SAFE. Assert 15c proves a spent Strawberry goes back into
+    /// the draw pool; on its own that is an unbounded max-HP loop. The guard lives in RepeatPickupPatch,
+    /// and nothing else in the battery would notice if it stopped working — the reshuffle would keep
+    /// passing every other assert while quietly printing free max HP.
+    ///
+    /// Max HP is the measurement because it is the whole payload of Strawberry / Mango / Pear: an
+    /// integer on the creature that moves if and only if the payout ran. No mocking, no reflection into
+    /// the patch — the assert reads the same number the player would.
+    /// </summary>
+    private static async Task<bool> CheckRepeatPickup(Player player)
+    {
+        try
+        {
+            // ★A silent-targeting guard. TargetMethods finds payout methods reflectively, so a renamed
+            // property in a game update would patch NOTHING and every other assert here would still pass
+            // (the second payout simply runs and max HP moves — which 16d catches, but only if a relic
+            // was found at all). Pin the count so the failure names itself.
+            bool armed = RepeatPickupPatch.PatchedCount > 0;
+            W($"assert 16a payout guard armed on {RepeatPickupPatch.PatchedCount} relic(s): {armed} (want True)");
+
+            var proto = FlatModels().OfType<RelicModel>().FirstOrDefault(r =>
+                r.HasUponPickupEffect &&
+                (r.Id.Entry == "STRAWBERRY" || r.Id.Entry == "MANGO" || r.Id.Entry == "PEAR"));
+            if (proto == null)
+            {
+                W("assert 16 repeat pickup: SKIPPED (no max-HP pickup relic in ModelDb)");
+                return armed;
+            }
+
+            int hp0 = player.Creature.MaxHp;
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(300);
+            int hp1 = player.Creature.MaxHp;
+
+            SpentRewardLedger.InvalidateForTest();
+            int picks1 = SpentRewardLedger.TimesPicked(player, proto.Id.Entry);
+            bool firstPaid = hp1 > hp0 && picks1 >= 1;
+            W($"assert 16b first pickup pays ({proto.Id.Entry}): maxHp {hp0}->{hp1}, "
+              + $"historyPicks={picks1} = {firstPaid} (want True)");
+            // picks1 == 0 means RelicCmd.Obtain wrote no history entry here, so the ledger has nothing to
+            // read and the guard below cannot possibly engage — say so rather than let 16d look like a
+            // suppression failure.
+            if (picks1 == 0) W("  ^ no pick was recorded in the run history — the ledger is blind in this harness");
+
+            // 16c: the copy that legitimately paid out is a normal relic and must NOT be marked.
+            var held = player.Relics.FirstOrDefault(r => r.Id.Entry == proto.Id.Entry);
+            if (held == null) { W("assert 16 repeat pickup: SKIPPED (first grant did not land)"); return armed; }
+            string marker = SpentMarkerPrefix();
+            bool quietWhenEarned = !(held.HoverTip.Description ?? "").StartsWith(marker, StringComparison.Ordinal);
+            W($"assert 16c the copy that paid out is NOT marked spent: {quietWhenEarned} (want True)");
+
+            // Take it away the way a reshuffle does, then buy it back.
+            player.RemoveRelicInternal(held);
+            RelicPoolReturn.TryReturn(player, held);
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(300);
+            int hp2 = player.Creature.MaxHp;
+
+            SpentRewardLedger.InvalidateForTest();
+            int picks2 = SpentRewardLedger.TimesPicked(player, proto.Id.Entry);
+            bool suppressed = hp2 == hp1;
+            W($"assert 16d second pickup pays nothing: maxHp {hp1}->{hp2}, "
+              + $"historyPicks={picks2} = {suppressed} (want True)");
+
+            // 16e: and the inert copy now says so, in the game's own words.
+            var again = player.Relics.FirstOrDefault(r => r.Id.Entry == proto.Id.Entry);
+            string desc = again?.HoverTip.Description ?? "";
+            bool marked = marker.Length > 0 && desc.StartsWith(marker, StringComparison.Ordinal);
+            W($"assert 16e the re-obtained copy is marked spent: {marked} (want True) "
+              + $"— tooltip gate: {SpentRewardTooltipPatch.LastSkip}");
+            if (!marked)
+            {
+                // Escaped: the console this lands on is cp949 and eats the Korean outright, which would
+                // hide the very difference being diagnosed.
+                W($"  marker[{marker.Length}] = {Esc(marker)}");
+                W($"  desc  [{desc.Length}] = {Esc(desc.Length > 80 ? desc.Substring(0, 80) : desc)}");
+                W($"  contains-marker={desc.Contains(marker, StringComparison.Ordinal)}");
+            }
+
+            return armed && firstPaid && quietWhenEarned && suppressed && marked;
+        }
+        catch (Exception e) { W("assert 16 repeat pickup THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>The red "all used up" line the tooltip patch prepends, rendered in whatever language the
+    /// game is running. Derived from the same loc entry rather than hard-coded, so the assert does not
+    /// quietly become English-only.</summary>
+    /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
+    private static string Esc(string s)
+    {
+        var sb = new StringBuilder();
+        foreach (char c in s)
+        {
+            if (c == '\n') sb.Append("\\n");
+            else if (c == '\r') sb.Append("\\r");
+            else if (c < 32 || c > 126) sb.Append("\\u").Append(((int)c).ToString("X4"));
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static string SpentMarkerPrefix()
+    {
+        var probe = new LocString("gameplay_ui", "RELIC_USED_UP");
+        // RELIC_USED_UP is a red line, then a newline, then {description}. Render it with a sentinel
+        // and cut there — ★NOT with an empty string: the formatter substitutes an empty variable with
+        // a literal U+0001 placeholder, so the "prefix" would carry a trailing character the real
+        // tooltip never has, and StartsWith would report False for a tooltip that is exactly right.
+        const string Sentinel = "@@DESC@@";
+        probe.Add("description", Sentinel);
+        string rendered = probe.GetFormattedText();
+        int at = rendered.IndexOf(Sentinel, StringComparison.Ordinal);
+        return at >= 0 ? rendered.Substring(0, at) : rendered;
     }
 
     private static List<string> Fingerprint(RunManager run)

@@ -215,7 +215,8 @@ internal static class ReshuffleService
 
             // The relic just left the player's hands, so it should be buyable/winnable again — vanilla's
             // "obtained means gone from the pool" rule assumes obtaining is keeping, which this mod
-            // breaks. One-time reward relics are deliberately NOT returned; see RelicPoolReturn.
+            // breaks. One-time reward relics return too; their second payout is suppressed instead
+            // (RepeatPickupPatch). See RelicPoolReturn.
             RelicPoolReturn.TryReturn(player, source);
 
             return fresh;
