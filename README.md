@@ -2,7 +2,9 @@
 
 **English** · [한국어](README.ko.md)
 
-A [Slay the Spire 2](https://store.steampowered.com/app/2868840/) mod that **re-rolls your entire relic collection every time you enter a fight**.
+A [Slay the Spire 2](https://store.steampowered.com/app/2868840/) mod that **reshuffles your relics into different relics of the same rarity every time you enter a fight**.
+
+Seven kinds of relic are deliberately left alone: starter relics and Circlet, Ancient and event relics unless you opt them in, wax relics from the Toy Box, relics you paid to re-forge or cleanse, relics added by other mods, and anything outside your character's own relic pool.
 
 Rarity is preserved: a common becomes a different common, a rare becomes a different rare. Your relic count and your overall power level never move — only *which* relics you are holding. The rolled relics stay with you until the next fight.
 
