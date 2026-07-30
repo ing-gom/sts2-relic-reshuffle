@@ -258,6 +258,10 @@ internal static class SoloTest
             bool inert = CheckInertGrant(player);
             if (!inert) ok = false;
 
+            // ── 19. WAR PAINT: the permanent-deck case, and full coverage ──────────────────────
+            bool deckSafe = await CheckPermanentDeckPayload(player);
+            if (!deckSafe) ok = false;
+
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
             if (!offers) ok = false;
@@ -846,6 +850,89 @@ internal static class SoloTest
             return noPayout && marked;
         }
         catch (Exception e) { W("assert 18 inert grant THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// War Paint upgrades two Skill cards in the RUN deck when picked up — the payload with the most
+    /// lasting consequence of any in the game, because a card upgrade survives the fight, the act and
+    /// every reshuffle after it. Obtaining the relic a second time must upgrade nothing.
+    ///
+    /// ★WHY THIS RELIC AND NOT ANOTHER. Max HP (assert 16) and gold (assert 17) already prove the guard
+    /// works. This one proves it for the case that would be unrecoverable if it leaked: the deck is
+    /// permanent state, so a second upgrade cannot be undone by anything the player or the mod does
+    /// later. It also needs no selection prompt — War Paint picks its own two cards — so a headless run
+    /// can measure it end to end.
+    ///
+    /// ★AND 19c IS THE "ALL OF THEM?" CHECK. Asserting three named relics does not establish that every
+    /// pickup payload is covered; a type the patcher skipped would sit there unguarded and no other
+    /// assert would notice. Counting ModelDb against the guard's own target set does establish it.
+    /// </summary>
+    private static async Task<bool> CheckPermanentDeckPayload(Player player)
+    {
+        try
+        {
+            var proto = FlatModels().OfType<RelicModel>().FirstOrDefault(r => r.Id.Entry == "WAR_PAINT");
+            if (proto == null) { W("assert 19 permanent deck payload: SKIPPED (WAR_PAINT not found)"); return true; }
+
+            int Upgraded() => player.Deck.Cards.Count(c => c != null && c.IsUpgraded);
+
+            int u0 = Upgraded();
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(400);
+            int u1 = Upgraded();
+            bool firstUpgraded = u1 > u0;
+            W($"assert 19a first WAR_PAINT upgrades the run deck: upgraded {u0}->{u1} = {firstUpgraded} (want True)");
+
+            var held = player.Relics.FirstOrDefault(r => r.Id.Entry == proto.Id.Entry);
+            if (held == null) { W("assert 19 permanent deck payload: SKIPPED (grant did not land)"); return firstUpgraded; }
+            player.RemoveRelicInternal(held);
+            RelicPoolReturn.TryReturn(player, held);
+
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(400);
+            int u2 = Upgraded();
+            bool suppressed = u2 == u1;
+            W($"assert 19b re-obtaining it upgrades nothing more: upgraded {u1}->{u2} = {suppressed} (want True)");
+
+            // ★19c/19d: "is EVERY pickup payload covered?" split into the two invariants that actually
+            // make it safe. The first draft asked for one thing — every payload in ModelDb guarded — and
+            // failed on 13 relics belonging to OTHER MODS, which the guard cannot see (it walks the game
+            // assembly). Loosening the assert until it went green would have hidden the real question, so
+            // it is asked properly instead: vanilla payloads must all be guarded, AND modded ones must be
+            // unreachable by this mod's mechanism in the first place.
+            var payloads = FlatModels().OfType<RelicModel>()
+                .GroupBy(r => r.Id.Entry).Select(g => g.First())
+                .Where(SpentRewardLedger.HasPickupPayload).ToList();
+
+            var vanilla = payloads.Where(r => r.GetType().Assembly == typeof(RelicModel).Assembly).ToList();
+            var vanillaUnguarded = vanilla.Where(r => !RepeatPickupPatch.CoversForTest(r))
+                                          .Select(r => r.Id.Entry).ToList();
+            bool complete = vanilla.Count > 0 && vanillaUnguarded.Count == 0;
+            W($"assert 19c every vanilla pickup payload is guarded: {vanilla.Count} relic(s), "
+              + $"{vanillaUnguarded.Count} unguarded = {complete} (want True)"
+              + (vanillaUnguarded.Count > 0 ? " — " + string.Join(",", vanillaUnguarded.Take(10)) : ""));
+
+            // ★The lock that makes the unguarded ones harmless. A modded relic is refused as a swap
+            // SOURCE, so it is never handed to RelicPoolReturn, so this mod never puts it back in the
+            // pool — vanilla's "obtained means gone from the bag" still holds for it and its payload
+            // cannot be re-run. If that filter is ever relaxed, this assert fails before the exploit ships.
+            var modded = payloads.Where(r => r.GetType().Assembly != typeof(RelicModel).Assembly).ToList();
+            var leaky = new List<string>();
+            foreach (var r in modded)
+            {
+                bool swappable;
+                try { swappable = ReshuffleService.IsSwappableSource(r, player); }
+                catch { swappable = false; }   // cannot even be inspected -> certainly not swapped
+                if (swappable) leaky.Add(r.Id.Entry);
+            }
+            bool locked = leaky.Count == 0;
+            W($"assert 19d modded payload relics can never be returned to the pool: {modded.Count} "
+              + $"modded relic(s), {leaky.Count} swappable = {locked} (want True)"
+              + (leaky.Count > 0 ? " — " + string.Join(",", leaky.Take(10)) : ""));
+
+            return firstUpgraded && suppressed && complete && locked;
+        }
+        catch (Exception e) { W("assert 19 permanent deck payload THREW: " + e.Message); return false; }
     }
 
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
