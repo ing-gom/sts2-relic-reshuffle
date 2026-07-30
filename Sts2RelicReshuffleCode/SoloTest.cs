@@ -120,6 +120,28 @@ internal static class SoloTest
             RelicModel? stackable = await GrantStack(player);
 
             W("owned before: " + Describe(player));
+
+            // ── 0. a normally-obtained relic must still be eligible ─────────────────────────────
+            // ★THE REGRESSION THIS EXISTS FOR. The relics above were granted through RelicCmd.Obtain —
+            // the real pickup path — and with Sts2RelicForge installed that path attaches a forge record
+            // to essentially EVERY relic. The pin rule used to be "has a forge record", which therefore
+            // froze the player's whole inventory: only relics this mod had itself swapped in stayed
+            // eligible, so each fight re-rolled one slot and by act 2 nothing was eligible at all.
+            // An earlier run of this very battery showed the symptom (3 eligible relics, 2 swapped) and
+            // it was written off as a test artifact. Asserting it makes that impossible to wave away.
+            // Rarity None is excluded structurally, not by a pin: rarity-preserving swaps need a pool of
+            // same-rarity peers and no None-rarity pool exists, so those relics can never be a source.
+            var pickups = player.Relics
+                .Where(r => r.Rarity != RelicRarity.Starter && r.Rarity != RelicRarity.None)
+                .ToList();
+            var frozen = pickups.Where(r => !ReshuffleService.IsSwappableSource(r, player)).ToList();
+            bool eligibleOk = pickups.Count > 0 && frozen.Count == 0;
+            W($"assert 0 every normal pickup is eligible: {eligibleOk} (want True) — {pickups.Count} pickup(s)"
+              + (frozen.Count > 0
+                 ? "  ★FROZEN: " + string.Join(", ", frozen.Select(r => $"{r.Id.Entry}(forge={RelicForgeBridge.DescriptorOf(r) ?? "-"})"))
+                 : ""));
+            if (!eligibleOk) ok = false;
+
             var before = Snapshot(player);
             long goldBefore = player.Gold;
             int maxHpBefore = player.Creature?.MaxHp ?? -1;
@@ -182,16 +204,23 @@ internal static class SoloTest
             if (!starterOk) ok = false;
 
             // ── 7. stackable relic pinned, stack intact ─────────────────────────────────────────
+            // ── 7. a stack is never LOST ────────────────────────────────────────────────────────
+            // The invariant is not "stackables are pinned" — they are allowed to swap now — but "an
+            // accumulated stack survives whatever happens". Either the relic stays and keeps its count,
+            // or it was swapped and the incoming relic inherited it.
             if (stackable == null)
             {
-                W("assert 7 stackable pinned: SKIPPED (no stackable relic available to grant)");
+                W("assert 7 stack preserved: SKIPPED (no stackable relic available to grant)");
             }
             else
             {
-                var live = player.Relics.FirstOrDefault(r => r.Id.Entry == stackable.Id.Entry);
+                var swappedTo = swaps.FirstOrDefault(s => s.FromEntry == stackable.Id.Entry);
+                var live = player.Relics.FirstOrDefault(r => r.Id.Entry ==
+                    (swappedTo.To != null ? swappedTo.To.Id.Entry : stackable.Id.Entry));
                 bool stackOk = live != null && live.StackCount == stackBefore;
-                W($"assert 7 stackable {stackable.Id.Entry} pinned with stack {stackBefore}: present={live != null}, "
-                  + $"stack={live?.StackCount ?? -1} = {stackOk} (want True)");
+                W($"assert 7 stack {stackBefore} preserved across the reshuffle: "
+                  + $"{stackable.Id.Entry}{(swappedTo.To != null ? " -> " + swappedTo.ToEntry : " (not swapped)")}, "
+                  + $"now={live?.StackCount ?? -1} = {stackOk} (want True)");
                 if (!stackOk) ok = false;
             }
 

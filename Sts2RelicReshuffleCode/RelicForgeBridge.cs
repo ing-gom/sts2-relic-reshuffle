@@ -25,7 +25,7 @@ internal static class RelicForgeBridge
 {
     private static bool _probed;
     private static bool _present;
-    private static MethodInfo? _isCompanion, _getDescriptor;
+    private static MethodInfo? _isCompanion, _getDescriptor, _getReforgeCount, _isCleansed;
 
     private static void Probe()
     {
@@ -45,8 +45,10 @@ internal static class RelicForgeBridge
 
             var pub = BindingFlags.Public | BindingFlags.Static;
             var relic = new[] { typeof(RelicModel) };
-            _isCompanion   = t.GetMethod("IsCompanion", pub, null, relic, null);
-            _getDescriptor = t.GetMethod("GetDescriptor", pub, null, relic, null);
+            _isCompanion     = t.GetMethod("IsCompanion", pub, null, relic, null);
+            _getDescriptor   = t.GetMethod("GetDescriptor", pub, null, relic, null);
+            _getReforgeCount = t.GetMethod("GetReforgeCount", pub, null, relic, null);
+            _isCleansed      = t.GetMethod("IsCleansed", pub, null, relic, null);
 
             // RelicForge before v1.0.19 has no IsCompanion on the public facade, and an un-updated
             // install is the COMMON case (the mods ship separately on the Workshop). Failing open there
@@ -70,16 +72,39 @@ internal static class RelicForgeBridge
         catch { return false; }
     }
 
-    /// <summary>True if RelicForge has attached a forge record (prefix / curse) to this relic instance.
-    /// False when RelicForge isn't installed or the relic is plain vanilla.</summary>
-    public static bool IsForged(RelicModel r)
+    /// <summary>
+    /// True if the player has actively INVESTED in this specific relic instance — re-forged it at a
+    /// campfire (which costs gold) or paid to cleanse its curse.
+    ///
+    /// ★THIS IS NOT "has a forge record", and the difference is the whole bug it was written for.
+    /// RelicForge patches <c>RelicCmd.Obtain</c> and attaches a record to EVERY relic the player picks
+    /// up, prefix or no prefix. Pinning on "has a record" therefore pinned the player's entire
+    /// inventory: only relics this mod itself had swapped in stayed eligible (they arrive through
+    /// <c>AddRelicInternal</c>, which bypasses RelicForge's hook), so each combat re-rolled the same
+    /// single slot and by act 2 nothing was eligible at all. Measured in a real run:
+    /// floor 6→8→11→14→17 all re-rolled one relic in a chain, then "nothing eligible".
+    ///
+    /// A pickup prefix is something the game handed out; a re-forge is something the player bought.
+    /// Only the second is worth freezing a relic over.
+    /// </summary>
+    public static bool IsPlayerInvested(RelicModel r)
     {
         try
         {
             Probe();
-            if (_getDescriptor == null) return false;
-            return _getDescriptor.Invoke(null, new object[] { r }) is string d && !string.IsNullOrEmpty(d);
+            if (!_present) return false;
+            if (_getReforgeCount?.Invoke(null, new object[] { r }) is int c && c > 0) return true;
+            if (_isCleansed?.Invoke(null, new object[] { r }) is true) return true;
+            return false;
         }
         catch { return false; }
+    }
+
+    /// <summary>RelicForge's raw forge descriptor, or null. Diagnostics only — see
+    /// <see cref="IsPlayerInvested"/> for why this must not be used as a pin test.</summary>
+    public static string? DescriptorOf(RelicModel r)
+    {
+        try { Probe(); return _getDescriptor?.Invoke(null, new object[] { r }) as string; }
+        catch { return null; }
     }
 }

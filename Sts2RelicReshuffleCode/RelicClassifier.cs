@@ -94,12 +94,10 @@ internal static class RelicClassifier
     ///     obtain path back in.)
     ///   · <c>SpawnsPets</c> / <c>AddsPet</c> — spawning a companion creature every combat entry, with
     ///     no matching despawn, accumulates junk in the combat state.
-    ///   · <c>IsStackable</c> — a fresh instance arrives at StackCount 1, so rolling one in mints a
-    ///     stack the player never earned. (Rolling one OUT is barred separately; see
-    ///     <see cref="ReshuffleService.IsSwappableSource"/>.)</summary>
+    /// Stackable relics are deliberately NOT excluded: a stackable source carries its accumulated count
+    /// onto a stackable target (see <see cref="ReshuffleService"/>), so nothing is lost or minted.</summary>
     public static bool IsValidTarget(RelicModel proto)
         => !proto.HasUponPickupEffect
         && !proto.SpawnsPets
-        && !proto.AddsPet
-        && !proto.IsStackable;
+        && !proto.AddsPet;
 }

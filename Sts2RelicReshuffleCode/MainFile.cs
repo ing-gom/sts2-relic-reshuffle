@@ -70,10 +70,10 @@ public class MainFile
                 defaultValue: true,
                 onChanged: v => ReshuffleConfig.CombatRelevantOnly = v)
                 .Description("Exclude relics that do nothing during a fight (shop discounts, campfire and reward modifiers) from the pool of relics you can be given. Default ON — without it a rare slot can land on a shop relic and read as an empty slot for the whole fight. Turn OFF for a wider, swingier pool.")
-            .Toggle(KeyKeepForged, "Keep forged relics (Relic Forge)",
+            .Toggle(KeyKeepForged, "Keep relics you re-forged (Relic Forge)",
                 defaultValue: true,
                 onChanged: v => ReshuffleConfig.KeepForged = v)
-                .Description("Pin relics that the Relic Forge mod has given a prefix or curse. Default ON — a forge record is attached to that specific relic, so re-rolling it destroys an upgrade you paid for. No effect if Relic Forge isn't installed.")
+                .Description("Pin relics you paid to re-forge or cleanse at a campfire, so a reshuffle cannot destroy work you spent gold on. Default ON. Note this counts only relics you actively invested in — Relic Forge attaches a prefix to almost everything you pick up, and pinning those would freeze your whole inventory. No effect if Relic Forge isn't installed.")
             .Toggle(KeyShowBanner, "Show what changed at combat start",
                 defaultValue: true,
                 onChanged: v => ReshuffleConfig.ShowBanner = v)

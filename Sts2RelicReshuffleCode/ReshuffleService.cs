@@ -133,6 +133,16 @@ internal static class ReshuffleService
             if (index < 0) return null;   // already gone (shouldn't happen; a snapshot went stale)
 
             RelicModel fresh = proto.ToMutable();
+
+            // Carry an accumulated stack across the swap. A fresh instance arrives at StackCount 1, so
+            // without this a stackable relic would silently lose progress the player built up outside
+            // combat. Only meaningful when BOTH sides stack — pushing a count onto a relic that does not
+            // stack would show a number the relic has no meaning for.
+            if (source.IsStackable && fresh.IsStackable && source.StackCount > 1)
+            {
+                for (int s = 1; s < source.StackCount; s++) fresh.IncrementStackCount();
+                MainFile.Logger.Info($"[{MainFile.ModId}] carried stack {source.StackCount} from {source.Id.Entry} to {fresh.Id.Entry}.");
+            }
             // Inherit the slot's provenance so inventory ordering and floor-based tooltips stay sane;
             // the player really has held *a* relic in this slot since that floor.
             fresh.FloorAddedToDeck = source.FloorAddedToDeck;
@@ -151,8 +161,6 @@ internal static class ReshuffleService
     /// <summary>
     /// Whether an owned relic may be rolled AWAY. Each rejection below is a concrete failure mode:
     ///
-    ///   · <b>Stackable</b> — the player's requirement, and the right call: a stack built up outside
-    ///     combat (Circlet and friends) is progress, and a fresh instance would arrive at StackCount 1.
     ///   · <b>Starter / Ancient</b> — configurable, both default to fixed. Starters ARE the character;
     ///     Ancients are run-defining and have no meaningful same-rarity peer set.
     ///   · <b>Wax</b> — a wax relic is on a melt countdown. Swapping a live one for a permanent relic is
@@ -172,13 +180,12 @@ internal static class ReshuffleService
     {
         if (r == null) return false;
         if (r.GetType().Assembly != GameAssembly) return false;
-        if (r.IsStackable) return false;
         if (r.IsWax || r.IsMelted) return false;
         if (r.Rarity == RelicRarity.None) return false;
         if (r.Rarity == RelicRarity.Starter && ReshuffleConfig.EffectiveKeepStarter) return false;
         if (r.Rarity == RelicRarity.Ancient && ReshuffleConfig.EffectiveKeepAncient) return false;
         if (RelicForgeBridge.IsCompanion(r)) return false;
-        if (ReshuffleConfig.EffectiveKeepForged && RelicForgeBridge.IsForged(r)) return false;
+        if (ReshuffleConfig.EffectiveKeepForged && RelicForgeBridge.IsPlayerInvested(r)) return false;
         return true;
     }
 
