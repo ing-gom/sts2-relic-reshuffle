@@ -268,8 +268,14 @@ internal static class ReshuffleService
         if (r.Rarity == RelicRarity.Starter) return false;
         if (r.Rarity == RelicRarity.Ancient && !ReshuffleConfig.EffectiveIncludeAncient) return false;
         if (r.Rarity == RelicRarity.Event && !ReshuffleConfig.EffectiveIncludeEvent) return false;
+        // A hidden Sts2RelicForge companion is a donor instance grafted onto a forged host, not a
+        // relic the player owns — swapping it would corrupt the host it belongs to.
         if (RelicForgeBridge.IsCompanion(r)) return false;
-        if (RelicForgeBridge.IsPlayerInvested(r)) return false;
+        // ★A re-forged or cleansed relic is NOT pinned. It used to be, on the theory that gold the
+        // player spent should not be shuffled away. That reasoning does not survive this mod's own
+        // premise: relics are transient here, so paying to improve one buys a better FIGHT, not a
+        // permanent fixture, and freezing those slots would mean the more a player invests the less
+        // the mod does for them.
         return true;
     }
 
