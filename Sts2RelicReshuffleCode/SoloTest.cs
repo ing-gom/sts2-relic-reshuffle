@@ -266,6 +266,10 @@ internal static class SoloTest
             bool modded = CheckModdedRelicsExcluded(player);
             if (!modded) ok = false;
 
+            // ── 21. a combat-restart / undo mod must not silently switch the reshuffle off ──────
+            bool restart = CheckRestartInteraction(player);
+            if (!restart) ok = false;
+
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
             if (!offers) ok = false;
@@ -977,34 +981,102 @@ internal static class SoloTest
                               .Select(g => $"{g.Key}:{g.Count()}");
             W($"assert 20 custom relics found: {custom.Count} of {all.Count} — {string.Join(" ", byAsm)}");
 
-            var swappable = new List<string>();
-            foreach (var r in custom)
+            // ★20a IS A SYMMETRY CHECK, not an exclusion count. Custom relics are allowed in now (the
+            // ones whose pickup does nothing), so "how many are excluded" is the wrong question. The one
+            // that matters is whether anything can be taken that cannot be given back: that is the
+            // one-way door which would strip a player of another mod's relics over a run. It applies to
+            // vanilla relics just as much, so every relic is checked, not only the custom ones.
+            var oneWay = new List<string>();
+            foreach (var r in all)
             {
                 bool can;
                 try { can = ReshuffleService.IsSwappableSource(r, player); }
                 catch { can = false; }
-                if (can) swappable.Add(r.Id.Entry);
+                if (can && !ReshuffleService.IsInTargetPool(r, player)) oneWay.Add(r.Id.Entry);
             }
-            bool outAsSource = swappable.Count == 0;
-            W($"assert 20a no custom relic can be swapped AWAY: {swappable.Count} swappable = "
-              + $"{outAsSource} (want True)"
-              + (swappable.Count > 0 ? " — " + string.Join(",", swappable.Take(8)) : ""));
+            bool symmetric = oneWay.Count == 0;
+            W($"assert 20a nothing can be taken that cannot be given back: {oneWay.Count} one-way = "
+              + $"{symmetric} (want True)"
+              + (oneWay.Count > 0 ? " — " + string.Join(",", oneWay.Take(8)) : ""));
 
-            // The target side is the pool builder, a completely separate filter — check every rarity the
-            // pool stocks, not just one, or a leak in a single bucket would go unseen.
-            var leaked = new List<string>();
+            // 20b: whichever custom relics DO qualify must be reachable from both ends, so report the
+            // two sides side by side rather than asserting a zero that no longer means anything.
+            int customSource = custom.Count(r => { try { return ReshuffleService.IsSwappableSource(r, player); } catch { return false; } });
+            var inPool = new List<string>();
             foreach (var rarity in new[] { RelicRarity.Common, RelicRarity.Uncommon,
                                            RelicRarity.Rare, RelicRarity.Shop })
                 foreach (var r in ReshuffleService.TargetPoolForTest(player, rarity))
-                    if (r.GetType().Assembly != game) leaked.Add($"{r.Id.Entry}({rarity})");
-            bool outAsTarget = leaked.Count == 0;
-            W($"assert 20b no custom relic can be handed OUT: {leaked.Count} in the pool = "
-              + $"{outAsTarget} (want True)"
-              + (leaked.Count > 0 ? " — " + string.Join(",", leaked.Take(8)) : ""));
+                    if (r.GetType().Assembly != game) inPool.Add(r.Id.Entry);
+            bool consistent = customSource == inPool.Distinct().Count();
+            W($"assert 20b custom relics in/out agree: {customSource} swappable vs {inPool.Distinct().Count()} "
+              + $"in the pool = {consistent} (want True) — this run's character is "
+              + $"{player.Character?.Id.Entry}, and the pool is character-scoped by the game's own rule");
 
-            return outAsSource && outAsTarget;
+            return symmetric && consistent;
         }
         catch (Exception e) { W("assert 20 modded relics THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// What happens when another mod restarts the fight.
+    ///
+    /// ★THE INTERACTION THIS PINS. Restart / undo mods re-enter combat on the SAME floor, and some of
+    /// them restore a pre-combat snapshot of the player first. The re-entry guard used to be a plain
+    /// "already rolled on this floor" flag, which answers that situation wrongly: the snapshot puts the
+    /// original relics back, the flag says "done here", and the player fights with un-reshuffled relics —
+    /// the mod silently off for that fight, with nothing in the log to say so.
+    ///
+    /// Neither half can be dropped, so both are measured:
+    ///   21a restoring the pre-roll inventory and re-entering DOES roll again, and lands on the exact
+    ///       same relics as the first roll (it is derived, not re-shuffled);
+    ///   21b a plain re-entry with nothing restored still does NOT roll (this is assert 10b's promise,
+    ///       and the new guard must not trade it away).
+    ///
+    /// This does not need the third-party mod installed: restore-then-re-enter IS what it does, and
+    /// driving it here measures our half of the contract exactly.
+    /// </summary>
+    private static bool CheckRestartInteraction(Player player)
+    {
+        try
+        {
+            var run = RunManager.Instance;
+            if (run?.State == null) { W("assert 21 restart: SKIPPED (no run state)"); return true; }
+
+            // Pre-roll snapshot, exactly what a restart mod would keep.
+            var snapshot = player.Relics.Select(r => r.CanonicalInstance ?? r).ToList();
+            string before = string.Join(",", snapshot.Select(r => r.Id.Entry));
+
+            CombatEntryPatch.ResetGuardForTest();
+            CombatEntryPatch.ReshuffleOnce(run.State);
+            string firstRoll = string.Join(",", player.Relics.Select(r => r.Id.Entry));
+
+            // 21b first: re-enter with nothing restored — must be left alone.
+            CombatEntryPatch.ReshuffleOnce(run.State);
+            string plainReentry = string.Join(",", player.Relics.Select(r => r.Id.Entry));
+            bool untouched = plainReentry == firstRoll;
+            W($"assert 21b plain re-entry still does not re-roll: {untouched} (want True)");
+
+            // Now do what the restart mod does: put the snapshot back, then enter combat again.
+            foreach (var r in player.Relics.ToList()) player.RemoveRelicInternal(r);
+            foreach (var proto in snapshot) player.AddRelicInternal(proto.ToMutable());
+            string restored = string.Join(",", player.Relics.Select(r => r.Id.Entry));
+            bool restoredOk = restored == before;
+
+            CombatEntryPatch.ReshuffleOnce(run.State);
+            string afterRestart = string.Join(",", player.Relics.Select(r => r.Id.Entry));
+            bool reapplied = afterRestart == firstRoll;
+            W($"assert 21a restart re-applies the SAME roll: {reapplied} (want True) — "
+              + $"restoreOk={restoredOk}");
+            if (!reapplied)
+            {
+                W("  first roll   : " + firstRoll);
+                W("  after restart: " + afterRestart);
+                W("  (== restored means the reshuffle was silently skipped for the restarted fight)");
+            }
+
+            return untouched && restoredOk && reapplied;
+        }
+        catch (Exception e) { W("assert 21 restart THREW: " + e.Message); return false; }
     }
 
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>

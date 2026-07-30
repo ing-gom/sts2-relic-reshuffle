@@ -245,13 +245,21 @@ internal static class ReshuffleService
     ///   · <b>RelicForge re-forged / cleansed</b> — the player spent gold on that specific instance, and
     ///     a re-roll would destroy it. Note this is INVESTMENT, not "has a forge record": RelicForge
     ///     attaches a record to nearly every pickup, and pinning those froze whole inventories.
-    ///   · <b>Non-vanilla</b> — see <see cref="GameAssembly"/>; deleting another mod's relic is not ours
+    ///   · <b>Another mod's relic that does something on pickup</b> — see
+    ///     <see cref="RelicClassifier.IsShuffleEligible"/>; deleting or granting one of those is not ours
     ///     to do.
     /// </summary>
     public static bool IsSwappableSource(RelicModel r, Player player)
     {
         if (r == null) return false;
-        if (r.GetType().Assembly != GameAssembly) return false;
+        if (!RelicClassifier.IsShuffleEligible(r)) return false;
+        // ★SYMMETRY: never take a relic we could not also hand back. Without this, a relic outside the
+        // player's own relic pool (another character's, or one a mod grants only through its own event)
+        // could be swapped AWAY but never appear as a target — so every fight would drain a few more of
+        // them and the player would end a run stripped of exactly the relics another mod gave them.
+        // The game draws relic rewards from the same two pools, so "not in the pool" really does mean
+        // "the game would never hand this out", and taking it would be a one-way door.
+        if (!IsInTargetPool(r, player)) return false;
         if (r.IsWax || r.IsMelted) return false;
         // Rarity None has no same-rarity pool, so it can never be swapped under a rarity-preserving
         // rule. This is what keeps CIRCLET out (it is the None-rarity stackable) — worth naming,
@@ -294,7 +302,7 @@ internal static class ReshuffleService
             foreach (RelicModel proto in candidates)
             {
                 if (proto == null) continue;
-                if (proto.GetType().Assembly != GameAssembly) continue;
+                if (!RelicClassifier.IsShuffleEligible(proto)) continue;
                 if (proto.Rarity == RelicRarity.None) continue;
                 if (proto.Rarity == RelicRarity.Starter) continue;   // never minted by a re-roll
                 if (proto.Rarity == RelicRarity.Ancient && !includeAncient) continue;
@@ -359,6 +367,26 @@ internal static class ReshuffleService
 
     /// <summary>Test-only view of the candidate pool for one rarity (the pool builder is private so the
     /// production surface stays small; the self-test needs it to construct an "owns everything" state).</summary>
+    /// <summary>Is this relic one the player could legitimately be handed? Pool membership is by relic
+    /// id: the pool holds canonical prototypes while the player holds mutable instances.</summary>
+    internal static bool IsInTargetPool(RelicModel relic, Player player)
+    {
+        try
+        {
+            var pool = BuildTargetPool(player, player.RunState);
+            if (!pool.TryGetValue(relic.Rarity, out var bucket)) return false;
+            foreach (var p in bucket)
+                if (string.Equals(p.Id.Entry, relic.Id.Entry, StringComparison.Ordinal)) return true;
+            return false;
+        }
+        catch (Exception e)
+        {
+            // Fail CLOSED — an unreadable pool must not license taking a relic we cannot give back.
+            MainFile.Logger.Warn($"[{MainFile.ModId}] pool membership probe failed: {e.Message}");
+            return false;
+        }
+    }
+
     internal static List<RelicModel> TargetPoolForTest(Player player, RelicRarity rarity)
         => BuildTargetPool(player, player.RunState).TryGetValue(rarity, out var list)
             ? list

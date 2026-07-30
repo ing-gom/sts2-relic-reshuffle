@@ -26,6 +26,47 @@ namespace Sts2RelicReshuffle;
 /// </summary>
 internal static class RelicClassifier
 {
+    private static readonly Dictionary<Type, bool> _eligible = new();
+
+    /// <summary>
+    /// May this relic take part in the shuffle at all?
+    ///
+    /// ★VANILLA: ALWAYS. Every vanilla relic has been accounted for by hand — the ones that end up inert
+    /// when granted silently are enumerated and marked in their tooltip.
+    ///
+    /// ★★ANOTHER MOD'S RELIC: ONLY IF ITS PICKUP DOES NOTHING. The reshuffle grants through
+    /// <c>AddRelicInternal</c>, so a relic's <c>AfterObtained</c> never runs. For vanilla that is a known,
+    /// countable cost. For third-party relics it is not auditable: Fur Coat is the in-house proof that
+    /// skipped obtain-time setup can leave a relic permanently broken (its act index stays -1 and every
+    /// later hook no-ops), and a modded relic could fail in ways that are not merely inert. A relic that
+    /// declares no <c>AfterObtained</c> has no setup to skip, so that entire failure mode is gone rather
+    /// than merely unlikely.
+    ///
+    /// Measured on the current install: 153 of 450 relics are custom, and 102 of them qualify.
+    /// </summary>
+    public static bool IsShuffleEligible(RelicModel relic)
+    {
+        if (relic == null) return false;
+        Type t = relic.GetType();
+        if (_eligible.TryGetValue(t, out bool cached)) return cached;
+
+        bool ok;
+        try
+        {
+            ok = t.Assembly == typeof(RelicModel).Assembly || !SpentRewardLedger.HasPickupPayload(relic);
+        }
+        catch (Exception e)
+        {
+            // Fail CLOSED for foreign code: leaving a modded relic out costs variety, letting a broken
+            // one in costs the other mod's correctness.
+            MainFile.Logger.Warn($"[{MainFile.ModId}] eligibility probe failed for {t.Name}: {e.Message}");
+            ok = false;
+        }
+
+        _eligible[t] = ok;
+        return ok;
+    }
+
     private static readonly Dictionary<Type, bool> _combatValue = new();
 
     /// <summary>Hooks that fire OUTSIDE a fight (reward screens, merchants, campfires, the map). A relic

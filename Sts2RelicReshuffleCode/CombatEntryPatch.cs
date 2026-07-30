@@ -62,7 +62,23 @@ internal static class CombatEntryPatch
     /// record resets whenever the run object changes identity, and the reload then re-derives — landing
     /// on the same relics as before, because the derivation is reproducible (solo assert 8).
     /// </summary>
-    private static readonly HashSet<(int floor, ulong netId)> _rolled = new();
+    /// <summary>Per (floor, player): the inventory this mod LEFT that player holding after rolling.
+    /// ★NOT a plain "already rolled here" flag — see <see cref="ReshuffleOnce"/> for why the difference
+    /// matters to combat-restart mods.</summary>
+    private static readonly Dictionary<(int floor, ulong netId), string> _rolled = new();
+
+    /// <summary>The relic ids a player holds, in slot order. Cheap, and order-sensitive because the
+    /// engine's checksum is too.</summary>
+    private static string Signature(Player p)
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var r in p.Relics) { sb.Append(r?.Id.Entry ?? "?"); sb.Append(','); }
+            return sb.ToString();
+        }
+        catch { return "(unreadable)"; }
+    }
     private static IRunState? _rolledRun;
 
     /// <summary>Test-only breadcrumb. The two co-op instances share one godot.log and clobber each
@@ -92,8 +108,29 @@ internal static class CombatEntryPatch
         }
     }
 
-    /// <summary>The reshuffle proper, idempotent per (run, floor, player). Separated from the Harmony
-    /// prefix so the self-test can call it twice and prove the second call changes nothing.</summary>
+    /// <summary>
+    /// The reshuffle proper, idempotent per (run, floor, player). Separated from the Harmony prefix so
+    /// the self-test can call it twice and prove the second call changes nothing.
+    ///
+    /// ★THE GUARD COMPARES INVENTORIES, NOT A FLAG, and that is what makes combat-restart and undo mods
+    /// work. A plain "already rolled on this floor" flag answers the wrong question. Re-entering the same
+    /// room must not roll again — rolling with the ALREADY-reshuffled relics as sources would derive a
+    /// different result and the player's relics would churn every re-entry. But a restart mod that
+    /// restores the pre-combat snapshot puts the ORIGINAL relics back, and a flag would then skip,
+    /// leaving the player to fight with un-reshuffled relics: the mod silently off for that fight.
+    ///
+    /// Recording what we left them holding distinguishes the two on sight:
+    ///   · inventory == what we left  → this is a re-entry, nothing to do;
+    ///   · inventory != what we left  → someone put different relics there, roll from those.
+    ///
+    /// Rolling again after a restore is safe precisely because the derivation is deterministic in
+    /// (seed, floor, NetId, slot, source id): the same pre-roll inventory yields the same post-roll one,
+    /// so the restart lands on the state the player had, rather than a fresh shuffle.
+    ///
+    /// ★It also covers save/load without a special case. The room-entry save holds pre-roll relics and
+    /// the post-combat save holds post-roll ones; both compare correctly against what we recorded, and a
+    /// reload into a fresh process has an empty table and simply rolls (deterministically, same result).
+    /// </summary>
     internal static void ReshuffleOnce(IRunState runState)
     {
         if (!ReferenceEquals(runState, _rolledRun))
@@ -108,14 +145,15 @@ internal static class CombatEntryPatch
             if (player == null) continue;
 
             var key = (runState.TotalFloor, player.NetId);
-            if (!_rolled.Add(key))
+            if (_rolled.TryGetValue(key, out string? left) && left == Signature(player))
             {
                 Trace += $" | {player.NetId}:guarded";
-                MainFile.Logger.Info($"[{MainFile.ModId}] floor {runState.TotalFloor}: {player.NetId} already reshuffled here — re-entry left as is.");
+                MainFile.Logger.Info($"[{MainFile.ModId}] floor {runState.TotalFloor}: {player.NetId} still holds what the re-roll left — re-entry left as is.");
                 continue;
             }
 
             var swaps = ReshuffleService.Reroll(player);
+            _rolled[key] = Signature(player);
             Trace += $" | {player.NetId}:{swaps.Count}swaps";
             if (swaps.Count == 0)
             {
