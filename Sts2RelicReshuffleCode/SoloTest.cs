@@ -240,6 +240,10 @@ internal static class SoloTest
             bool reentry = CheckReentry(run);
             if (!reentry) ok = false;
 
+            // ── 15. a relic the reshuffle took away returns to the draw pool ────────────────────
+            bool returned = await CheckPoolReturn(player);
+            if (!returned) ok = false;
+
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
             if (!offers) ok = false;
@@ -560,6 +564,68 @@ internal static class SoloTest
             return clean && rejects && accepts;
         }
         catch (Exception e) { W("assert 14 offer filter THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// A relic the reshuffle takes away must become obtainable again — and a one-time reward relic must
+    /// NOT.
+    ///
+    /// ★BOTH HALVES MATTER. Returning relics to the pool is the point (vanilla drops them forever, which
+    /// only makes sense when obtaining means keeping). But returning a relic whose payload already paid
+    /// out would let the player collect it, lose it to a reshuffle, buy it again and collect twice — an
+    /// unbounded loop. So the test pins the carve-out as well as the feature.
+    /// </summary>
+    private static async Task<bool> CheckPoolReturn(Player player)
+    {
+        try
+        {
+            // A plain relic obtained the honest way: Obtain removes it from the pool.
+            var proto = PickPlainRelic(player, RelicRarity.Uncommon);
+            if (proto == null) { W("assert 15 pool return: SKIPPED (no plain Uncommon to grant)"); return true; }
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(200);
+            var owned = player.Relics.FirstOrDefault(r => r.Id.Entry == proto.Id.Entry);
+            if (owned == null) { W("assert 15 pool return: SKIPPED (grant did not land)"); return true; }
+
+            bool? beforeIn = RelicPoolReturn.IsInPool(player, owned);
+            if (beforeIn == null) { W("assert 15 pool return: SKIPPED (grab bag not reachable)"); return true; }
+            W($"assert 15a obtained relic left the pool: {beforeIn == false} (want True) — {proto.Id.Entry}");
+
+            // Take it away the way a reshuffle would, then it should be back.
+            var target = ReshuffleService.TargetPoolForTest(player, RelicRarity.Uncommon)
+                .FirstOrDefault(r => r.Id.Entry != proto.Id.Entry
+                                  && player.Relics.All(o => o.Id.Entry != r.Id.Entry));
+            if (target == null) { W("assert 15 pool return: SKIPPED (no swap target)"); return true; }
+            ReshuffleService.ForceSwapForTest(player, owned, target);
+            bool afterIn = RelicPoolReturn.IsInPool(player, proto) == true;
+            W($"assert 15b swapped-away relic returned to the pool: {afterIn} (want True)");
+
+            // The carve-out: a one-time reward relic must stay out even after being swapped away.
+            var oneTime = FlatModels().OfType<RelicModel>()
+                .FirstOrDefault(r => r.HasUponPickupEffect && r.Rarity == RelicRarity.Common);
+            bool carveOk = true;
+            if (oneTime == null) W("assert 15c one-time carve-out: SKIPPED (no Common pickup-effect relic)");
+            else
+            {
+                // ★It must be OUT of the pool first, or this proves nothing: a pickup-effect relic that
+                // was never obtained is already in the pool, so "is it in the pool?" would read true no
+                // matter what TryReturn did. (First write of this check failed for exactly that reason.)
+                player.RelicGrabBag.Remove(oneTime);
+                bool clearedFirst = RelicPoolReturn.IsInPool(player, oneTime) == false;
+
+                var live = oneTime.ToMutable();
+                player.AddRelicInternal(live);                       // silent: its payload never fires
+                RelicPoolReturn.TryReturn(player, live);              // must be REFUSED
+                bool stillOut = RelicPoolReturn.IsInPool(player, oneTime) == false;
+                carveOk = clearedFirst && stillOut;
+                W($"assert 15c one-time reward relic NOT returned ({oneTime.Id.Entry}): "
+                  + $"clearedFirst={clearedFirst}, stillOut={stillOut} = {carveOk} (want True)");
+                player.RemoveRelicInternal(live);
+            }
+
+            return beforeIn == false && afterIn && carveOk;
+        }
+        catch (Exception e) { W("assert 15 pool return THREW: " + e.Message); return false; }
     }
 
     private static List<string> Fingerprint(RunManager run)

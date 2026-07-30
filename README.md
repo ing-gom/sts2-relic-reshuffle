@@ -31,7 +31,8 @@ It also makes the rules self-describing: your relic count and rarity spread are 
 - **Eat your stacks.** If a stackable relic is ever swapped, the incoming relic inherits the count, so progress you built up outside combat is never lost.
 - **Delete another mod's relics.** Both sides of the swap are restricted to base-game relics.
 - **Hand you a relic you couldn't have earned.** The pool is your own — the shared pool plus your character's pool, filtered by your unlock state, exactly as the game builds it for real relic rewards. Relics that only come from the Ancient One or from events are never handed out, and neither are rarity-less relics such as Circlet.
-- **Give you two of the same relic.** A re-roll only ever picks something you don't already hold, and once you own an entire rarity it rotates those relics between your slots instead — so you keep reshuffling, still without duplicates.
+- **Give you two of the same relic.** A re-roll only ever picks something you don't already hold, and once you own an entire rarity it rotates those relics between your slots instead — so you keep reshuffling, still without duplicates. Shops, treasures and rewards also skip anything you are currently holding.
+- **Shrink your pool as the run goes.** Vanilla drops a relic from the draw pool the moment you obtain it, which is correct when obtaining means keeping — but here relics come and go. A relic the reshuffle takes away goes back into the pool and can be bought or won again. One-time reward relics are the exception: once their payout is spent they stay out, or you could collect it twice.
 - **Perturb the run seed.** The re-roll derives from its own RNG stream, so rewards, shops and the map are bit-identical to a vanilla run of the same seed.
 
 ## Settings

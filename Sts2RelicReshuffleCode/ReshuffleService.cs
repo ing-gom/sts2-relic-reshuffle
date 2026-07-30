@@ -212,6 +212,12 @@ internal static class ReshuffleService
 
             player.RemoveRelicInternal(source);
             player.AddRelicInternal(fresh, index);
+
+            // The relic just left the player's hands, so it should be buyable/winnable again — vanilla's
+            // "obtained means gone from the pool" rule assumes obtaining is keeping, which this mod
+            // breaks. One-time reward relics are deliberately NOT returned; see RelicPoolReturn.
+            RelicPoolReturn.TryReturn(player, source);
+
             return fresh;
         }
         catch (Exception e)
