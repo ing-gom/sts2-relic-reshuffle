@@ -65,6 +65,11 @@ internal static class CombatEntryPatch
     private static readonly HashSet<(int floor, ulong netId)> _rolled = new();
     private static IRunState? _rolledRun;
 
+    /// <summary>Test-only breadcrumb. The two co-op instances share one godot.log and clobber each
+    /// other's lines, so "did this peer run the reshuffle?" could not be answered from the log at all.
+    /// The self-test reads this and puts it in its own per-role result file.</summary>
+    internal static string Trace = "(prefix never ran)";
+
     [HarmonyPrefix]
     [HarmonyPatch("StartCombat")]
     private static void Prefix(CombatRoom __instance)
@@ -74,13 +79,15 @@ internal static class CombatEntryPatch
             if (__instance == null) return;
 
             IRunState? runState = RunManager.Instance?.State;
-            if (runState == null) return;
+            if (runState == null) { Trace = "prefix: runState null"; return; }
 
+            Trace = $"prefix: entered, players={runState.Players.Count}, floor={runState.TotalFloor}";
             ReshuffleOnce(runState);
         }
         catch (Exception e)
         {
             // A failed re-roll must never block combat entry — the player just fights with what they had.
+            Trace += " | THREW: " + e.GetType().Name + ": " + e.Message;
             MainFile.Logger.Error($"[{MainFile.ModId}] combat-entry re-roll failed: {e}");
         }
     }
@@ -95,6 +102,7 @@ internal static class CombatEntryPatch
             _rolledRun = runState;
         }
 
+        bool recorded = false;
         foreach (var player in runState.Players)
         {
             if (player == null) continue;
@@ -102,11 +110,13 @@ internal static class CombatEntryPatch
             var key = (runState.TotalFloor, player.NetId);
             if (!_rolled.Add(key))
             {
+                Trace += $" | {player.NetId}:guarded";
                 MainFile.Logger.Info($"[{MainFile.ModId}] floor {runState.TotalFloor}: {player.NetId} already reshuffled here — re-entry left as is.");
                 continue;
             }
 
             var swaps = ReshuffleService.Reroll(player);
+            Trace += $" | {player.NetId}:{swaps.Count}swaps";
             if (swaps.Count == 0)
             {
                 MainFile.Logger.Info($"[{MainFile.ModId}] floor {runState.TotalFloor}: no re-roll for {player.NetId} (nothing eligible).");
@@ -117,16 +127,34 @@ internal static class CombatEntryPatch
                 $"[{(HostReshuffleConfig.UseHost ? "host cfg" : "local cfg")}: {HostReshuffleConfig.Describe()}]: " +
                 string.Join(", ", swaps.ConvertAll(s => s.ToString())));
 
-            // Only the local player's swaps are recorded for the log. In co-op an ally's re-roll is
-            // their business, and interleaving both would bury the one the player has to act on.
-            if (IsLocal(player))
-            {
-                ReshuffleHistory.Record(runState, runState.TotalFloor, swaps);
-                // Reveals the top-bar button and flashes it. It stays hidden outside a fight — see
-                // NReshuffleSummaryButton for why the log is combat-only.
-                NReshuffleSummaryButton.Pulse();
-            }
+            // Record EVERY player, keyed by NetId. Which entry to show is decided when the panel is
+            // opened — see ReshuffleHistory for why deciding "is this me?" here loses the feature on a
+            // co-op client (its identity has not settled at this point in room entry).
+            ReshuffleHistory.Record(runState.TotalFloor, player.NetId, swaps);
+            recorded = true;
+            Trace += "(recorded)";
         }
+
+        // Reveal + flash the top-bar button, once, and only if THIS machine's player actually had
+        // something reshuffled. Deferred a beat for the same reason the recording no longer branches on
+        // identity: right now ReshuffleHistory.Current may not resolve yet, but a second later it will.
+        if (recorded) SchedulePulse();
+    }
+
+    /// <summary>Flash the log button shortly after the reshuffle, once the local identity has settled.</summary>
+    private static void SchedulePulse()
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) return;
+            var timer = tree.CreateTimer(1.2, processAlways: true);
+            timer.Timeout += () =>
+            {
+                if (ReshuffleHistory.Current != null) NReshuffleSummaryButton.Pulse();
+                else NReshuffleSummaryButton.PulseTrace = "skipped: Current was null at pulse time";
+            };
+        }
+        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] pulse scheduling failed: {e.Message}"); }
     }
 
     /// <summary>Test-only: forget the per-run record so a self-test can exercise the same floor twice.</summary>
@@ -136,10 +164,5 @@ internal static class CombatEntryPatch
         _rolledRun = null;
     }
 
-    private static bool IsLocal(Player player)
-    {
-        try { return LocalContext.IsMe(player); }
-        catch { return true; }   // single-player: the only player there is
-    }
 
 }

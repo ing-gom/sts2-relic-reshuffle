@@ -181,7 +181,12 @@ internal static class CoopTest
               + (unchanged.Count > 0 ? $" — unchanged: {string.Join(",", unchanged)}" : ""));
 
             await Shot("02_final");
-            Flush(twoPlayers && allChanged);
+            bool converged = twoPlayers && allChanged;
+            Write(converged);   // bank it before the win, which pops reward screens
+
+            bool gating = await CheckButtonGating(run, me, issueWin: true);
+            await Shot("03_after_win");
+            Flush(converged && gating);
         }
         catch (Exception e) { W("HOST exception: " + e); Flush(false); }
     }
@@ -263,7 +268,12 @@ internal static class CoopTest
             W($"JOIN assert: two players = {twoPlayers} (want True)");
 
             await Shot("02_final");
-            Flush(converged && twoPlayers && setupAgreed);
+            bool verdict = converged && twoPlayers && setupAgreed;
+            Write(verdict);   // bank it before the host's win pops reward screens here too
+
+            bool gating = await CheckButtonGating(RunManager.Instance!, me, issueWin: false);
+            await Shot("03_after_win");
+            Flush(verdict && gating);
         }
         catch (Exception e) { W("JOIN exception: " + e); Flush(false); }
     }
@@ -403,6 +413,100 @@ internal static class CoopTest
         return true;
     }
 
+    /// <summary>The top-bar log button's visibility: true/false if it exists, null if it does not.
+    /// Null is reported as SKIPPED rather than failed — a missing UI node must not sink the convergence
+    /// verdict this battery exists for.</summary>
+    private static bool? ButtonVisible()
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) return null;
+            return Find(tree.Root, "NReshuffleSummaryButton") is Control c ? c.Visible : (bool?)null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>How many nodes with this name exist. More than one means a rebuilt UI left a second
+    /// copy behind — the discriminator between "wrong node inspected" and "right node, wrong state".</summary>
+    private static int CountNamed(string name)
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) return -1;
+            int n = 0;
+            void Walk(Node node)
+            {
+                if (node.Name == name) n++;
+                foreach (var c in node.GetChildren()) Walk(c);
+            }
+            Walk(tree.Root);
+            return n;
+        }
+        catch { return -1; }
+    }
+
+    private static Node? Find(Node n, string name)
+    {
+        if (n.Name == name) return n;
+        foreach (var c in n.GetChildren())
+        {
+            var r = Find(c, name);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Measure that the log button is combat-only, on a REAL fight.
+    ///
+    /// ★WHY IT HAS TO BE HERE. The solo battery never enters combat (it drives Reroll directly), so the
+    /// hide half of the gating had no measurement at all — it was guaranteed by construction only. The
+    /// networked <c>win</c> command kills every enemy, which produces a genuine victory and therefore
+    /// fires the game's own CombatManager.CombatEnded, the exact signal the button listens to.
+    /// </summary>
+    private static async Task<bool> CheckButtonGating(RunManager run, Player me, bool issueWin)
+    {
+        // ★Diagnostics go in the RESULT FILE, not the log. Two instances write the same godot.log and
+        // clobber each other's lines — the previous cycle's reshuffle log entries were simply gone, which
+        // made "did the local-player branch run here?" unanswerable. The result file is per-role.
+        try
+        {
+            var st = run.State;
+            ulong netId = 0;
+            try { netId = run.NetService.NetId; } catch { }
+            W($"  [diag] NetService.NetId={netId}, recorded={(ReshuffleHistory.Current != null)}, hasAny={ReshuffleHistory.HasAny}");
+            W($"  [diag] patch trace: {CombatEntryPatch.Trace}");
+            W($"  [diag] history trace: {ReshuffleHistory.Trace}");
+            W($"  [diag] pulse trace: {NReshuffleSummaryButton.PulseTrace}, buttonsInTree={CountNamed("NReshuffleSummaryButton")}");
+            if (st != null)
+                foreach (var p in st.Players)
+                    W($"  [diag] player {p.NetId}: IsMe={SafeIsMe(p)}, netIdMatch={p.NetId == netId}");
+        }
+        catch (Exception e) { W("  [diag] failed: " + e.Message); }
+
+        bool? during = ButtonVisible();
+        W($"button during combat = {(during?.ToString() ?? "(not found)")} (want True)");
+
+        if (issueWin)
+        {
+            Step("win (ends the fight so CombatEnded fires)");
+            run.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, "win", inCombat: true));
+        }
+        await Task.Delay(9000);
+
+        bool? after = ButtonVisible();
+        W($"button after the fight ended = {(after?.ToString() ?? "(not found)")} (want False)");
+
+        if (during == null || after == null)
+        {
+            W("assert button gating: SKIPPED (button node not found)");
+            return true;
+        }
+        bool ok = during.Value && !after.Value;
+        W($"assert button gating (visible in combat, hidden after) = {ok} (want True)");
+        return ok;
+    }
+
     private static ulong LocalNetId(RunManager run)
     {
         try { return run.NetService.NetId; } catch { return 1uL; }
@@ -454,6 +558,22 @@ internal static class CoopTest
     {
         _out.AppendLine(line);
         MainFile.Logger.Info($"[{MainFile.ModId}] COOP[{_role}] | {line}");
+    }
+
+    /// <summary>Write the result file WITHOUT ending the test. Used to bank the convergence verdict
+    /// before attempting anything that could hang: winning the fight pops the reward screens, and this
+    /// battery carries only a card selector, not the full screen pump. If that wedges we still keep the
+    /// measurement we came for instead of timing out with nothing.</summary>
+    private static void Write(bool ok)
+    {
+        try
+        {
+            // Fully qualified: Godot also defines an Environment type, so the bare name is ambiguous here.
+            string header = (ok ? "RESULT: OK" : "RESULT: FAIL") + System.Environment.NewLine
+                          + "role=" + _role + System.Environment.NewLine;
+            File.WriteAllText(Path.Combine(ModDir(), $"selftest.coop.{_role}.txt"), header + _out);
+        }
+        catch { }
     }
 
     private static void Flush(bool ok)

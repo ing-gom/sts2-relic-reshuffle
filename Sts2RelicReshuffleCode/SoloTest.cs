@@ -529,7 +529,8 @@ internal static class SoloTest
             // Seed the log the way a real fight would, then open the panel from code (the top-bar
             // button only exists inside a run's UI, and the test drives the panel, not the button).
             ReshuffleHistory.ResetForTest();
-            ReshuffleHistory.Record(RunManager.Instance!.State!, RunManager.Instance!.State!.TotalFloor, swaps);
+            ReshuffleHistory.Record(RunManager.Instance!.State!.TotalFloor,
+                RunManager.Instance!.State!.Players.First().NetId, swaps);
 
             if (NReshuffleSummaryPanel.IsOpen) NReshuffleSummaryPanel.Close();
             NReshuffleSummaryPanel.Toggle();

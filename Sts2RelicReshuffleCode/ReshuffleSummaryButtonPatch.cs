@@ -50,6 +50,15 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
 
     private static NReshuffleSummaryButton? _instance;
 
+    /// <summary>Test-only breadcrumb: what Pulse actually managed to do. The co-op result file is the
+    /// only reliable channel (two instances share one godot.log), and "the button did not appear" has
+    /// too many possible causes to guess between.</summary>
+    internal static string PulseTrace = "(pulse never called)";
+
+    /// <summary>Set when a fight's reshuffle has been announced, cleared when the fight ends. A rebuilt
+    /// button consults this (via <see cref="ReshuffleHistory.Current"/>) rather than starting hidden.</summary>
+    private static bool _shownForFight;
+
     private NTopBar _bar = null!;
     private bool _positioned;   // anchor computed once, after the bar's layout settles
     private bool _inFlow;       // true when a BoxContainer lays us out (no manual anchor)
@@ -65,7 +74,16 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         // shipped that overlap once; this is the same fix.
         var target = parent is Container && parent.GetParent() is Control grand ? grand : parent;
         var host = target is BoxContainer ? target : bar;
-        if (host.GetNodeOrNull(nameof(NReshuffleSummaryButton)) != null) return;   // already attached
+        // ★ADOPT an existing button instead of returning blind. NTopBar._Ready can fire more than once
+        // (measured on a co-op CLIENT, whose run UI is rebuilt), and the old code returned here WITHOUT
+        // updating _instance — leaving the static pointing at a freed node while a live, hidden button
+        // sat in the tree. Pulse then found an invalid instance and did nothing, so the client never saw
+        // the log button at all even though everything upstream had recorded correctly.
+        if (host.GetNodeOrNull(nameof(NReshuffleSummaryButton)) is NReshuffleSummaryButton existing)
+        {
+            _instance = existing;
+            return;
+        }
 
         // Hidden until a fight actually reshuffles something.
         var btn = new NReshuffleSummaryButton { _bar = bar, Name = nameof(NReshuffleSummaryButton), Visible = false };
@@ -87,19 +105,53 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
     /// ([[feedback_perf_guard]]).</summary>
     public static void Pulse()
     {
-        var btn = _instance;
-        if (btn == null || !GodotObject.IsInstanceValid(btn)) return;
+        var btn = Resolve();
+        // ★Fall back to a NAME lookup. Resolve() matches by TYPE, which fails if the mod assembly ends
+        // up loaded twice — the node in the tree is then a different Type object with the same name, and
+        // every typed search silently misses it. Visibility only needs a Control, so take whichever we
+        // can get and let the tween be the part that needs the real type.
+        Control? ctrl = btn ?? FindNamed();
+        if (ctrl == null) { PulseTrace = "no button found (typed and named both missed)"; return; }
         try
         {
-            btn.Visible = true;
-            btn.SubscribeCombatEnd();
+            ctrl.Visible = true;
+            PulseTrace = $"shown via {(btn != null ? "typed" : "named")} lookup";
+            btn?.SubscribeCombatEnd();
+            _shownForFight = true;
+            if (btn == null) return;   // no typed instance: visibility is set, skip the tween
 
             var tween = btn.CreateTween();
             tween.SetLoops(3);
             tween.TweenProperty(btn, "modulate", new Color(1f, 0.86f, 0.35f), 0.35f);
             tween.TweenProperty(btn, "modulate", Colors.White, 0.35f);
         }
-        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] summary pulse failed: {e.Message}"); }
+        catch (Exception e)
+        {
+            PulseTrace = "threw: " + e.Message;
+            MainFile.Logger.Warn($"[{MainFile.ModId}] summary pulse failed: {e.Message}");
+        }
+    }
+
+    /// <summary>The button located by NODE NAME rather than type — see the remark in Pulse.</summary>
+    private static Control? FindNamed()
+    {
+        try
+        {
+            if (Engine.GetMainLoop() is not SceneTree tree) return null;
+            return Walk(tree.Root) as Control;
+        }
+        catch { return null; }
+
+        static Node? Walk(Node n)
+        {
+            if (n.Name == nameof(NReshuffleSummaryButton)) return n;
+            foreach (var c in n.GetChildren())
+            {
+                var r = Walk(c);
+                if (r != null) return r;
+            }
+            return null;
+        }
     }
 
     /// <summary>Hide the button, drop the record and close the panel when the fight is over. Wired to
@@ -109,7 +161,7 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         try
         {
             Visible = false;
-            ReshuffleHistory.Clear();
+            _shownForFight = false;
             if (NReshuffleSummaryPanel.IsOpen) NReshuffleSummaryPanel.Close();
         }
         catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] summary hide-on-combat-end failed: {e.Message}"); }
@@ -133,8 +185,45 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
 
     private bool _subscribed;
 
+    /// <summary>The live button, re-found in the scene tree if the cached instance went stale. Belt and
+    /// braces alongside the adoption in <see cref="Attach"/>: a static reference to a Godot node can be
+    /// outlived by a UI rebuild, and this feature is invisible when that happens.</summary>
+    private static NReshuffleSummaryButton? Resolve()
+    {
+        if (_instance != null && GodotObject.IsInstanceValid(_instance)) return _instance;
+        try
+        {
+            if (Engine.GetMainLoop() is SceneTree tree)
+            {
+                var found = FindIn(tree.Root);
+                if (found != null) { _instance = found; return found; }
+            }
+        }
+        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] button resolve failed: {e.Message}"); }
+        return null;
+    }
+
+    private static NReshuffleSummaryButton? FindIn(Node n)
+    {
+        if (n is NReshuffleSummaryButton b) return b;
+        foreach (var c in n.GetChildren())
+        {
+            var r = FindIn(c);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
     public override void _Ready()
     {
+        // ★VISIBILITY IS DERIVED, NOT COMMANDED. Pulse() showing the button once is not enough: measured
+        // on a co-op client, the top bar is rebuilt AFTER the reshuffle, so Attach created a fresh
+        // HIDDEN button in the new bar and the one Pulse had shown was gone — the trace said
+        // "shown via typed lookup" while the button on screen was a different, hidden node. A node that
+        // decides its own visibility from the record at _Ready cannot be undone by being rebuilt.
+        Visible = ReshuffleHistory.Current != null;
+        SubscribeCombatEnd();
+
         TextureNormal = LoadIcon();
         IgnoreTextureSize = true;
         StretchMode = StretchModeEnum.KeepAspectCentered;
