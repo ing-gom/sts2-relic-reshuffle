@@ -162,6 +162,8 @@ internal static class CoopTest
                 run.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, "relic " + id, inCombat: false));
             await Task.Delay(10000);
 
+            bool payload = await PayloadProbe(run, me);
+
             var beforeSnap = PerPlayer(run);
             string before = Descriptor(run);
             W("HOST: BEFORE " + before);
@@ -189,7 +191,7 @@ internal static class CoopTest
               + (unchanged.Count > 0 ? $" — unchanged: {string.Join(",", unchanged)}" : ""));
 
             await Shot("02_final");
-            bool converged = twoPlayers && allChanged;
+            bool converged = twoPlayers && allChanged && payload;
             Write(converged);   // bank it before the win, which pops reward screens
 
             bool gating = await CheckButtonGating(run, me, issueWin: true);
@@ -222,6 +224,8 @@ internal static class CoopTest
             // Track the descriptor over time rather than sampling once: if the two peers diverge, the
             // timeline says WHEN, which is most of the diagnosis. A dropped session nulls run.State, so
             // guard it — dying on an NRE here would destroy the evidence we came for.
+            bool payload = await PayloadProbe(RunManager.Instance!, me);
+
             Step("watching for the host's room jump + reshuffle");
             string last = "";
             int startFloor = run.State?.TotalFloor ?? -1;
@@ -285,8 +289,15 @@ internal static class CoopTest
             bool twoPlayers = (RunManager.Instance?.State?.Players?.Count ?? 0) >= 2;
             W($"JOIN assert: two players = {twoPlayers} (want True)");
 
+            // Both peers ran the probe on their OWN player, so the two PAYLOAD lines describe different
+            // players and must NOT be compared to each other. What matters is that each peer reached the
+            // same verdict locally, and that the FINAL descriptor — which carries hp and gold for BOTH
+            // players — agrees. A one-sided payout surfaces there.
+            string? hostPayload = ReadHostLine(hostPath, "PAYLOAD ");
+            W($"JOIN assert: local payload guard held = {payload} (want True); host reported: {hostPayload ?? "(missing)"}");
+
             await Shot("02_final");
-            bool verdict = converged && twoPlayers && setupAgreed;
+            bool verdict = converged && twoPlayers && setupAgreed && payload;
             Write(verdict);   // bank it before the host's win pops reward screens here too
 
             bool gating = await CheckButtonGating(RunManager.Instance!, me, issueWin: false,
@@ -295,6 +306,64 @@ internal static class CoopTest
             Flush(verdict && gating);
         }
         catch (Exception e) { W("JOIN exception: " + e); Flush(false); }
+    }
+
+    /// <summary>Relic whose entire pickup payload is a max-HP gain — the cleanest thing to measure, and
+    /// the exact class the repeat-pickup guard exists for.</summary>
+    private const string PayloadRelic = "mango";
+
+    /// <summary>
+    /// Grant a one-time reward relic twice through the networked path and prove the second grant pays
+    /// nothing — ON THIS PEER, from its own replicated history.
+    ///
+    /// ★THIS IS THE CO-OP RISK THE v0.5.0 CHANGE INTRODUCED. The suppression decision is not broadcast:
+    /// each peer counts picks in its own <c>MapPointHistory</c> and decides independently. If the two
+    /// copies of that history disagree by even one entry, one peer runs the payout and the other does
+    /// not — the players end the fight with different max HP, which is a genuine desync in a checksummed
+    /// field. Nothing in single-player can see this: there is only one history there.
+    ///
+    /// Each peer acts on ITSELF. <c>NetConsoleCmdGameAction</c> does not carry the owner across the wire,
+    /// so a grant issued here is attributed to THIS peer's player on both machines (see the class remark).
+    /// </summary>
+    private static async Task<bool> PayloadProbe(RunManager run, Player me)
+    {
+        try
+        {
+            Step("one-time payload: first grant");
+            int hp0 = MaxHpOf(me);
+            run.ActionQueueSynchronizer.RequestEnqueue(
+                new ConsoleCmdGameAction(me, "relic " + PayloadRelic, inCombat: false));
+            await Task.Delay(6000);
+            int hp1 = MaxHpOf(me);
+
+            SpentRewardLedger.InvalidateForTest();
+            int picks1 = SpentRewardLedger.TimesPicked(me, "MANGO");
+            bool paid = hp1 > hp0 && picks1 >= 1;
+            W($"payload assert A first grant paid: maxHp {hp0}->{hp1}, picks={picks1} = {paid} (want True)");
+
+            // Take it away the way the reshuffle would, then take it again.
+            Step("one-time payload: remove + second grant");
+            run.ActionQueueSynchronizer.RequestEnqueue(
+                new ConsoleCmdGameAction(me, "relic remove " + PayloadRelic, inCombat: false));
+            await Task.Delay(4000);
+            run.ActionQueueSynchronizer.RequestEnqueue(
+                new ConsoleCmdGameAction(me, "relic " + PayloadRelic, inCombat: false));
+            await Task.Delay(6000);
+
+            int hp2 = MaxHpOf(me);
+            SpentRewardLedger.InvalidateForTest();
+            int picks2 = SpentRewardLedger.TimesPicked(me, "MANGO");
+            bool suppressed = hp2 == hp1;
+            W($"payload assert B second grant paid nothing: maxHp {hp1}->{hp2}, picks={picks2} = {suppressed} (want True)");
+            // ★What this peer ITSELF suppressed, for BOTH players. Convergence of the final state does
+            // not prove each peer decided independently — replication could have masked a one-sided
+            // decision. This line is the difference between inferring that and measuring it.
+            string supp = string.Join(",", RepeatPickupPatch.SuppressedForTest.OrderBy(x => x, StringComparer.Ordinal));
+            W($"PAYLOAD hp={hp2} picks={picks2} suppressedHere=[{supp}]");
+
+            return paid && suppressed;
+        }
+        catch (Exception e) { W("payload probe THREW: " + e.Message); return false; }
     }
 
     /// <summary>Every player's relic list, ordered by NetId then by inventory slot. Slot order matters:
@@ -306,12 +375,18 @@ internal static class CoopTest
         {
             var state = run.State;
             if (state == null) return "(no state)";
+            // ★hp/gold are in here on purpose. The pickup-payload guard decides per peer, from replicated
+            // history, whether to run a payout — so a divergence shows up as ONE peer's max HP or gold
+            // moving. A relic-only descriptor would converge while the two players had different stats.
             var parts = state.Players.OrderBy(p => p.NetId)
-                .Select(p => $"{p.NetId}=[{RelicsLine(p)}]");
+                .Select(p => $"{p.NetId}=[{RelicsLine(p)}] hp={MaxHpOf(p)} gold={GoldOf(p)}");
             return $"floor={state.TotalFloor} | " + string.Join(" | ", parts);
         }
         catch (Exception e) { return "(descriptor failed: " + e.Message + ")"; }
     }
+
+    private static int MaxHpOf(Player p) { try { return p.Creature.MaxHp; } catch { return -1; } }
+    private static long GoldOf(Player p) { try { return p.Gold; } catch { return -1; } }
 
     private static string RelicsLine(Player p)
     {

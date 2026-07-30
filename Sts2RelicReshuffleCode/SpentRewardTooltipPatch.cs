@@ -18,6 +18,10 @@ namespace Sts2RelicReshuffle;
 /// sit in a shop for 200 gold after its max HP is long since banked — and buying it now does nothing
 /// (<see cref="RepeatPickupPatch"/>). Without a mark on the tooltip that is a gold trap with no tell.
 ///
+/// ★MARKED ONLY WHEN THE RELIC IS NOW WORTHLESS. The guard suppresses every repeat pickup payload, but a
+/// relic that also does something during a fight is still worth owning — so the mark is gated on
+/// <c>HasCombatValue</c> being false, not merely on having a payload.
+///
 /// ★REUSES THE GAME'S OWN STRING. <c>gameplay_ui / RELIC_USED_UP</c> is the phrasing the game already
 /// uses for a spent relic ("[red]This relic was all used up.[/red]\n{description}") and it ships in all
 /// 14 languages. Writing our own line would mean 14 translations to maintain and a second idiom for the
@@ -42,7 +46,12 @@ internal static class SpentRewardTooltipPatch
         try
         {
             if (__instance == null) { LastSkip = "null instance"; return; }
-            if (!__instance.HasUponPickupEffect) { LastSkip = "not a pickup-reward relic"; return; }
+            if (!SpentRewardLedger.HasPickupPayload(__instance)) { LastSkip = "no pickup payload"; return; }
+            // ★Only mark relics whose payload is ALL they do. Belt Buckle and Snecko Eye also override
+            // AfterObtained (a "if obtained mid-combat, apply now" fixup) but keep working every fight —
+            // stamping "all used up" on one of those would be a lie that talks the player out of a
+            // perfectly good relic. HasCombatValue is exactly the "does it still do something" test.
+            if (RelicClassifier.HasCombatValue(__instance)) { LastSkip = "still has combat value"; return; }
 
             // The getter already wraps melted / used-up relics in their own red line. Wrapping again
             // would stack two banners saying nearly the same thing.

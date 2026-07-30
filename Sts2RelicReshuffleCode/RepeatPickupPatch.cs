@@ -24,11 +24,16 @@ namespace Sts2RelicReshuffle;
 /// Patching <c>AfterObtained</c> touches exactly the thing that must not happen twice and leaves every
 /// piece of vanilla bookkeeping to vanilla.
 ///
-/// ★TARGETING IS PURELY REFLECTIVE, no instances needed. A relic can only have a pickup payout if it
-/// overrides BOTH <c>HasUponPickupEffect</c> (the base returns false) and <c>AfterObtained</c> (the base
-/// returns a completed task), so the declaring-type test finds precisely that set — 47 relics in the
-/// current build. The prefix re-checks <c>HasUponPickupEffect</c> on the instance anyway, so a modded
-/// relic that computes it per-instance still behaves.
+/// ★★TARGET EVERY <c>AfterObtained</c> OVERRIDE, NOT JUST THE FLAGGED ONES. The first version keyed on
+/// <c>HasUponPickupEffect</c> and that was wrong: 33 relics run a pickup payload without setting the flag
+/// — Gnarled Hammer enchants a card, Signet Ring hands over 999 gold, Large Capsule gives two relics.
+/// Gnarled Hammer is Shop rarity, so it is genuinely stocked in the grab bag and the loop was reachable
+/// in ordinary play (buy, enchant, get reshuffled, buy again). Declaring the override IS the payload, so
+/// the declaring-type test alone is the right filter — 80 relics in the current build.
+///
+/// ★SUPPRESSING A NON-REWARD PAYLOAD IS HARMLESS. A few of these overrides are just "if I was obtained
+/// mid-combat, apply my effect now" fixups (Belt Buckle, Snecko Eye). Skipping one on a REPEAT pickup
+/// costs nothing: their real hook is <c>BeforeCombatStart</c>, which still runs.
 /// </summary>
 [HarmonyPatch]
 internal static class RepeatPickupPatch
@@ -36,6 +41,12 @@ internal static class RepeatPickupPatch
     /// <summary>Test-only: how many payout methods were actually patched. An assert on this catches the
     /// silent failure where a game update renames something and the whole guard quietly targets nothing.</summary>
     internal static int PatchedCount;
+
+    /// <summary>Test-only: every (relic, owner) whose payload this peer actually suppressed.
+    /// ★It lives here rather than in the log because two co-op instances write the SAME godot.log and
+    /// clobber each other's lines — a log-based count is not admissible evidence about which peer did
+    /// what. The result file is per-role, so this is.</summary>
+    internal static readonly List<string> SuppressedForTest = new();
 
     private static IEnumerable<MethodBase> TargetMethods()
     {
@@ -50,10 +61,7 @@ internal static class RepeatPickupPatch
             if (t == null || t.IsAbstract || !typeof(RelicModel).IsAssignableFrom(t)) continue;
             try
             {
-                // DeclaringType == t means this type overrides it rather than inheriting the base's false.
-                PropertyInfo? flag = t.GetProperty("HasUponPickupEffect", Any);
-                if (flag == null || flag.DeclaringType != t) continue;
-
+                // DeclaringType == t means this type overrides the base's do-nothing implementation.
                 MethodInfo? payout = t.GetMethod("AfterObtained", Any, null, Type.EmptyTypes, null);
                 if (payout == null || payout.DeclaringType != t) continue;
 
@@ -66,16 +74,27 @@ internal static class RepeatPickupPatch
         }
 
         PatchedCount = found.Count;
-        MainFile.Logger.Info($"[{MainFile.ModId}] one-time payout guard armed on {found.Count} relic(s).");
+        MainFile.Logger.Info($"[{MainFile.ModId}] pickup-payload guard armed on {found.Count} relic(s).");
         return found;
+    }
+
+    /// <summary>Test-only: is this relic's payload covered by the guard? Lets an assert name the exact
+    /// relic that motivated the fix (Gnarled Hammer) instead of only checking a count.</summary>
+    internal static bool CoversForTest(RelicModel relic)
+    {
+        try
+        {
+            var m = relic.GetType().GetMethod("AfterObtained",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            return m != null && m.DeclaringType == relic.GetType();
+        }
+        catch { return false; }
     }
 
     private static bool Prefix(RelicModel __instance, ref Task __result)
     {
         try
         {
-            if (!__instance.HasUponPickupEffect) return true;
-
             // Obtain calls AddRelicInternal before awaiting the payout, so the owner is already attached.
             // No owner means we cannot consult that player's history — run vanilla rather than guess.
             Player? owner = __instance.Owner;
@@ -83,9 +102,10 @@ internal static class RepeatPickupPatch
 
             if (!SpentRewardLedger.IsRepeatPickup(owner, __instance)) return true;
 
+            try { SuppressedForTest.Add($"{__instance.Id.Entry}@{owner.NetId}"); } catch { }
             MainFile.Logger.Info(
-                $"[{MainFile.ModId}] {__instance.Id.Entry} was already paid out this run — " +
-                "obtained again, reward suppressed.");
+                $"[{MainFile.ModId}] {__instance.Id.Entry} already ran its pickup payload this run — " +
+                "obtained again, payload suppressed.");
             __result = Task.CompletedTask;
             return false;
         }

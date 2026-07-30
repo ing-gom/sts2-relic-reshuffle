@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 
@@ -99,16 +100,57 @@ internal static class SpentRewardLedger
         }
     }
 
-    /// <summary>Is this pickup a repeat, i.e. must its one-time payout be suppressed? See the class
-    /// remark for why the threshold is 2 and not 1.</summary>
-    public static bool IsRepeatPickup(Player player, RelicModel relic)
-        => relic != null && relic.HasUponPickupEffect && TimesPicked(player, relic.Id.Entry) >= 2;
+    /// <summary>
+    /// Does obtaining this relic run a payload at all?
+    ///
+    /// ★NOT <c>HasUponPickupEffect</c>, and that distinction is the whole point. The flag is the game's
+    /// label for "this relic's value IS its pickup" (Strawberry, Mango) and 47 relics set it — but 33
+    /// MORE override <c>AfterObtained</c> without it: Gnarled Hammer enchants a card, Signet Ring hands
+    /// over 999 gold, Large Capsule gives you two relics. Gating on the flag left every one of those
+    /// re-runnable, so returning them to the pool was an unbounded loop. Gnarled Hammer is Shop rarity,
+    /// i.e. actually stocked in the grab bag, so that loop was reachable in ordinary play: buy it,
+    /// enchant a card, let the reshuffle take it, buy it again.
+    ///
+    /// Declaring the override IS the payload — the base returns a completed task and does nothing.
+    /// </summary>
+    public static bool HasPickupPayload(RelicModel relic)
+    {
+        if (relic == null) return false;
+        Type t = relic.GetType();
+        if (_payload.TryGetValue(t, out bool cached)) return cached;
 
-    /// <summary>Has this relic's one-time reward already been handed over at some point this run? Unlike
+        bool has;
+        try
+        {
+            var m = t.GetMethod("AfterObtained",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, Type.EmptyTypes, null);
+            has = m != null && m.DeclaringType != typeof(RelicModel);
+        }
+        catch (Exception e)
+        {
+            // Fail CLOSED here: treating an unreadable type as "has a payload" only costs a suppressed
+            // repeat pickup, while treating it as payload-free would reopen the loop.
+            MainFile.Logger.Warn($"[{MainFile.ModId}] payload probe failed for {t.Name}: {e.Message}");
+            has = true;
+        }
+
+        _payload[t] = has;
+        return has;
+    }
+
+    private static readonly Dictionary<Type, bool> _payload = new();
+
+    /// <summary>Is this pickup a repeat, i.e. must its payload be suppressed? See the class remark for
+    /// why the threshold is 2 and not 1.</summary>
+    public static bool IsRepeatPickup(Player player, RelicModel relic)
+        => HasPickupPayload(relic) && TimesPicked(player, relic.Id.Entry) >= 2;
+
+    /// <summary>Has this relic's pickup payload already been handed over at some point this run? Unlike
     /// <see cref="IsRepeatPickup"/> this is asked about a relic the player is looking at rather than one
     /// being obtained, so a single recorded pick is enough.</summary>
     public static bool RewardAlreadyPaid(Player player, RelicModel relic)
-        => relic != null && relic.HasUponPickupEffect && TimesPicked(player, relic.Id.Entry) >= 1;
+        => HasPickupPayload(relic) && TimesPicked(player, relic.Id.Entry) >= 1;
 
     /// <summary>Test-only: drop the memo so an assert can observe a change it just made.</summary>
     internal static void InvalidateForTest() => _stamp = long.MinValue;

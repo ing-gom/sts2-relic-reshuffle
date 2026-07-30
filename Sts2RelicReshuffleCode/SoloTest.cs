@@ -732,7 +732,14 @@ internal static class SoloTest
                 W($"  contains-marker={desc.Contains(marker, StringComparison.Ordinal)}");
             }
 
-            return armed && firstPaid && quietWhenEarned && suppressed && marked;
+            // ── 17. the payload relics the game does NOT flag ────────────────────────────────────
+            // ★THE REGRESSION THIS EXISTS FOR. The guard originally keyed on HasUponPickupEffect, which
+            // 47 relics set — but 33 more run a pickup payload without it. Gnarled Hammer (Shop rarity,
+            // so genuinely stocked in the grab bag) enchants a card on pickup: buy, enchant, let the
+            // reshuffle take it, buy again, enchant again. Every assert above passed while that was live.
+            bool unflagged = await CheckUnflaggedPayload(player);
+
+            return armed && firstPaid && quietWhenEarned && suppressed && marked && unflagged;
         }
         catch (Exception e) { W("assert 16 repeat pickup THREW: " + e.Message); return false; }
     }
@@ -740,6 +747,50 @@ internal static class SoloTest
     /// <summary>The red "all used up" line the tooltip patch prepends, rendered in whatever language the
     /// game is running. Derived from the same loc entry rather than hard-coded, so the assert does not
     /// quietly become English-only.</summary>
+    /// <summary>
+    /// A relic with a pickup payload but WITHOUT <c>HasUponPickupEffect</c> must not re-run it either.
+    ///
+    /// Signet Ring is the measurement because its entire payload is <c>PlayerCmd.GainGold(999)</c> — an
+    /// integer that moves if and only if the payload ran, and no selection prompt to hang a headless run.
+    /// Gnarled Hammer is the relic that actually motivated the fix (it is the only one of these in a
+    /// rarity the grab bag stocks), so its coverage is pinned by name rather than inferred from a count.
+    /// </summary>
+    private static async Task<bool> CheckUnflaggedPayload(Player player)
+    {
+        try
+        {
+            var proto = FlatModels().OfType<RelicModel>()
+                .FirstOrDefault(r => r.Id.Entry == "SIGNET_RING" && !r.HasUponPickupEffect);
+            if (proto == null) { W("assert 17 unflagged payload: SKIPPED (SIGNET_RING not found unflagged)"); return true; }
+
+            long g0 = player.Gold;
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(300);
+            long g1 = player.Gold;
+            bool firstPaid = g1 > g0;
+            W($"assert 17a unflagged payload pays once ({proto.Id.Entry}): gold {g0}->{g1} = {firstPaid} (want True)");
+
+            var held = player.Relics.FirstOrDefault(r => r.Id.Entry == proto.Id.Entry);
+            if (held == null) { W("assert 17 unflagged payload: SKIPPED (grant did not land)"); return firstPaid; }
+            player.RemoveRelicInternal(held);
+            RelicPoolReturn.TryReturn(player, held);
+
+            await RelicCmd.Obtain(proto.ToMutable(), player);
+            await Task.Delay(300);
+            long g2 = player.Gold;
+            bool suppressed = g2 == g1;
+            W($"assert 17b re-obtaining it pays nothing: gold {g1}->{g2} = {suppressed} (want True)");
+
+            var hammer = FlatModels().OfType<RelicModel>().FirstOrDefault(r => r.Id.Entry == "GNARLED_HAMMER");
+            bool covered = hammer == null || RepeatPickupPatch.CoversForTest(hammer);
+            W($"assert 17c GNARLED_HAMMER (Shop rarity, the reachable one) is covered: {covered} (want True)"
+              + (hammer == null ? " — SKIPPED, relic not in ModelDb" : ""));
+
+            return firstPaid && suppressed && covered;
+        }
+        catch (Exception e) { W("assert 17 unflagged payload THREW: " + e.Message); return false; }
+    }
+
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
     private static string Esc(string s)
     {
