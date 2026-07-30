@@ -52,6 +52,10 @@ internal static class ReshuffleService
     /// conditions that mod grants it under.</summary>
     private static readonly System.Reflection.Assembly GameAssembly = typeof(RelicModel).Assembly;
 
+    /// <summary>Keeps the rotation's RNG stream distinct from the per-slot draw, so a slot that falls
+    /// through to the rotation doesn't reuse the stream position its normal draw would have had.</summary>
+    private const int RotationSalt = 0x0B17A7;
+
     /// <summary>
     /// Re-roll <paramref name="player"/>'s relics in place. Returns the swaps performed, oldest slot
     /// first, for logging and the combat-start readout.
@@ -93,6 +97,10 @@ internal static class ReshuffleService
             player.Relics.Where(r => !RelicForgeBridge.IsCompanion(r)).Select(r => r.Id.Entry),
             StringComparer.Ordinal);
 
+        // Slots that found no UNOWNED same-rarity relic — i.e. the player already holds everything of
+        // that rarity. Handled after the main pass; see PermuteExhausted.
+        var exhausted = new List<RelicModel>();
+
         for (int slot = 0; slot < sources.Count; slot++)
         {
             RelicModel source = sources[slot];
@@ -100,7 +108,7 @@ internal static class ReshuffleService
 
             // Fresh filtered view per slot — `taken` grows as we go.
             var available = candidates.Where(c => !taken.Contains(c.Id.Entry)).ToList();
-            if (available.Count == 0) continue;
+            if (available.Count == 0) { exhausted.Add(source); continue; }
 
             // Seeded per slot AND per source id: two slots of the same rarity must not collapse onto the
             // same draw, and re-entering the same floor must reproduce the same result.
@@ -114,7 +122,61 @@ internal static class ReshuffleService
             swaps.Add(new Swap(source, fresh!));
         }
 
+        swaps.AddRange(PermuteExhausted(player, exhausted, seed, floor, who));
         return swaps;
+    }
+
+    /// <summary>
+    /// Handle the collector's endgame: a player who already owns every relic of a rarity.
+    ///
+    /// ★WHY NOT JUST LEAVE THEM. The main pass only ever picks a relic the player does NOT own, which is
+    /// what guarantees a re-roll always CHANGES something and never mints a duplicate. Once the player
+    /// holds the whole rarity, that filter empties and those slots would silently freeze — the mod would
+    /// quietly stop working exactly for the most invested players.
+    ///
+    /// ★WHY A ROTATION RATHER THAN A RE-DRAW. Allowing owned relics back into the draw would let two
+    /// slots land on the same id. Rotating the exhausted slots' own relics among themselves is a
+    /// permutation by construction: every slot ends up holding a relic it did not hold before, the
+    /// multiset is unchanged, and a duplicate is impossible. A lone exhausted slot has nothing to trade
+    /// with, so it keeps what it has.
+    ///
+    /// Targets are read from a snapshot taken BEFORE any mutation, so the rotation is applied against
+    /// the original assignment rather than a half-updated inventory.
+    /// </summary>
+    private static List<Swap> PermuteExhausted(Player player, List<RelicModel> exhausted,
+                                               uint seed, int floor, int who)
+    {
+        var result = new List<Swap>();
+        if (exhausted.Count < 2) return result;
+
+        foreach (var group in exhausted.GroupBy(r => r.Rarity))
+        {
+            // Stable order so every co-op peer rotates the same list the same way.
+            var members = group.OrderBy(r => r.Id.Entry, StringComparer.Ordinal).ToList();
+            int n = members.Count;
+            if (n < 2) continue;
+
+            // Rotate by a deterministic offset in [1, n-1]: never 0, so no slot keeps its own relic.
+            var rng = ReshuffleRng.From((int)seed, floor, who, RotationSalt, n,
+                                        ReshuffleRng.Hash(group.Key.ToString()));
+            int shift = 1 + rng.Next(n - 1);
+
+            // Snapshot the canonical prototypes before mutating anything.
+            var protos = members.Select(m => m.CanonicalInstance).ToList();
+
+            for (int i = 0; i < n; i++)
+            {
+                RelicModel source = members[i];
+                RelicModel? proto = protos[(i + shift) % n];
+                if (proto == null) continue;
+                RelicModel? fresh = ApplySwap(player, source, proto);
+                if (fresh == null) continue;
+                result.Add(new Swap(source, fresh));
+            }
+            MainFile.Logger.Info(
+                $"[{MainFile.ModId}] {group.Key}: player owns the whole rarity — rotated {n} relic(s) by {shift}.");
+        }
+        return result;
     }
 
     /// <summary>Replace <paramref name="source"/> with a fresh mutable copy of <paramref name="proto"/>
@@ -181,7 +243,12 @@ internal static class ReshuffleService
         if (r == null) return false;
         if (r.GetType().Assembly != GameAssembly) return false;
         if (r.IsWax || r.IsMelted) return false;
+        // Rarity None has no same-rarity pool, so it can never be swapped under a rarity-preserving
+        // rule. This is what keeps CIRCLET out (it is the None-rarity stackable) — worth naming,
+        // because it is also why the stack carry-over below can never actually fire today.
         if (r.Rarity == RelicRarity.None) return false;
+        // Event relics are excluded on purpose, matching the target pool (see BuildTargetPool).
+        if (r.Rarity == RelicRarity.Event) return false;
         if (r.Rarity == RelicRarity.Starter && ReshuffleConfig.EffectiveKeepStarter) return false;
         if (r.Rarity == RelicRarity.Ancient && ReshuffleConfig.EffectiveKeepAncient) return false;
         if (RelicForgeBridge.IsCompanion(r)) return false;
@@ -214,6 +281,11 @@ internal static class ReshuffleService
                 if (proto.Rarity == RelicRarity.None) continue;
                 if (proto.Rarity == RelicRarity.Starter) continue;   // never minted by a re-roll
                 if (proto.Rarity == RelicRarity.Ancient && ReshuffleConfig.EffectiveKeepAncient) continue;
+                // ★Event relics are never handed out. Most live in EventRelicPool, which this method
+                // does not read — but FRESNEL_LENS sits in SharedRelicPool, so without this line it
+                // becomes a legal target the moment "combat-useful only" is switched off. It was being
+                // filtered incidentally, which is not the same as being excluded.
+                if (proto.Rarity == RelicRarity.Event) continue;
                 if (!RelicClassifier.IsValidTarget(proto)) continue;
                 if (combatOnly && !RelicClassifier.HasCombatValue(proto)) continue;
                 if (!proto.IsAllowed(runState)) continue;
@@ -234,6 +306,13 @@ internal static class ReshuffleService
         }
         return result;
     }
+
+    /// <summary>Test-only view of the candidate pool for one rarity (the pool builder is private so the
+    /// production surface stays small; the self-test needs it to construct an "owns everything" state).</summary>
+    internal static List<RelicModel> TargetPoolForTest(Player player, RelicRarity rarity)
+        => BuildTargetPool(player, player.RunState).TryGetValue(rarity, out var list)
+            ? list
+            : new List<RelicModel>();
 
     /// <summary>Pool sizes per rarity, for the startup log and the self-test.</summary>
     public static string DescribePool(Player player)

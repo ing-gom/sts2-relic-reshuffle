@@ -236,6 +236,10 @@ internal static class SoloTest
             bool reentry = CheckReentry(run);
             if (!reentry) ok = false;
 
+            // ── 11. owning an entire rarity still reshuffles (runs LAST — it wrecks the inventory) ──
+            bool collector = CheckOwnsEverything(player);
+            if (!collector) ok = false;
+
             await Shot("2_final");
             W($"=== solo test done: {(ok ? "PASS" : "FAIL")} ===");
             Flush(ok);
@@ -323,6 +327,56 @@ internal static class SoloTest
             return same && firstDidWork;
         }
         catch (Exception e) { W("assert 10 re-entry THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// The collector's endgame: give the player EVERY Common in their pool, then reshuffle.
+    ///
+    /// ★WHY IT MATTERS. The normal draw only picks relics the player does not own — that is what makes a
+    /// re-roll always change something and never duplicate. Own the whole rarity and that filter empties,
+    /// so without the rotation fallback these slots would freeze silently, and the mod would stop working
+    /// precisely for the most invested players. This asserts the three things the rotation must hold:
+    /// the multiset is unchanged, nothing duplicated, and every slot actually moved.
+    ///
+    /// Destructive (it rewrites the whole inventory), so it runs last.
+    /// </summary>
+    private static bool CheckOwnsEverything(Player player)
+    {
+        try
+        {
+            var commons = ReshuffleService.TargetPoolForTest(player, RelicRarity.Common);
+            if (commons.Count < 2)
+            {
+                W($"assert 11 owns-everything: SKIPPED (Common pool has {commons.Count})");
+                return true;
+            }
+
+            foreach (var r in player.Relics.ToList())
+                if (r.Rarity == RelicRarity.Common) player.RemoveRelicInternal(r);
+            foreach (var proto in commons)
+                player.AddRelicInternal(proto.ToMutable());
+
+            var before = player.Relics.Where(r => r.Rarity == RelicRarity.Common)
+                                      .Select(r => r.Id.Entry).ToList();
+            CombatEntryPatch.ResetGuardForTest();
+            var swaps = ReshuffleService.Reroll(player);
+            var after = player.Relics.Where(r => r.Rarity == RelicRarity.Common)
+                                     .Select(r => r.Id.Entry).ToList();
+
+            bool sameSet = before.OrderBy(x => x, StringComparer.Ordinal)
+                                 .SequenceEqual(after.OrderBy(x => x, StringComparer.Ordinal), StringComparer.Ordinal);
+            bool noDupes = after.Distinct(StringComparer.Ordinal).Count() == after.Count;
+            int moved = before.Zip(after, (b, a) => b == a ? 0 : 1).Sum();
+            bool allMoved = moved == before.Count;
+
+            W($"assert 11a owns {before.Count} Common(s), multiset unchanged: {sameSet} (want True)");
+            W($"assert 11b no duplicates after rotation: {noDupes} (want True)");
+            W($"assert 11c every slot moved: {moved}/{before.Count} = {allMoved} (want True), swaps={swaps.Count}");
+            if (!sameSet || !noDupes || !allMoved)
+                W("  before: " + string.Join(",", before) + "\n  after:  " + string.Join(",", after));
+            return sameSet && noDupes && allMoved;
+        }
+        catch (Exception e) { W("assert 11 owns-everything THREW: " + e.Message); return false; }
     }
 
     private static List<string> Fingerprint(RunManager run)

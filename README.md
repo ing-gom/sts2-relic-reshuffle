@@ -28,7 +28,8 @@ It also makes the rules self-describing: your relic count and rarity spread are 
 - **Re-fire one-time rewards.** Relics whose whole payload is dispensed on pickup (Strawberry, Mango, Pandora's Box, …) are never handed out by a re-roll, and relics are swapped through the game's silent inventory path, so `AfterObtained` cannot fire. Your gold, max HP and potion slots are untouched by a reshuffle.
 - **Eat your stacks.** Stackable relics are never swapped, so a stack you built up outside combat survives.
 - **Delete another mod's relics.** Both sides of the swap are restricted to base-game relics.
-- **Hand you a relic you couldn't have earned.** The pool is your own — the shared pool plus your character's pool, filtered by your unlock state, exactly as the game builds it for real relic rewards.
+- **Hand you a relic you couldn't have earned.** The pool is your own — the shared pool plus your character's pool, filtered by your unlock state, exactly as the game builds it for real relic rewards. Relics that only come from the Ancient One or from events are never handed out, and neither are rarity-less relics such as Circlet.
+- **Give you two of the same relic.** A re-roll only ever picks something you don't already hold, and once you own an entire rarity it rotates those relics between your slots instead — so you keep reshuffling, still without duplicates.
 - **Perturb the run seed.** The re-roll derives from its own RNG stream, so rewards, shops and the map are bit-identical to a vanilla run of the same seed.
 
 ## Settings
