@@ -379,6 +379,32 @@ internal static class SoloTest
         catch (Exception e) { W("assert 11 owns-everything THREW: " + e.Message); return false; }
     }
 
+    /// <summary>Diagnostic: what the relic-bar anchor is actually looking at. The first attempt anchored
+    /// to NRun.GlobalUi.RelicInventory and landed the panel mid-screen, which means that Control is not
+    /// the icon strip it looks like. Dump its rect and its children's so the anchor can target the right
+    /// node instead of being guessed at.</summary>
+    private static void DumpRelicBar()
+    {
+        try
+        {
+            var inv = MegaCrit.Sts2.Core.Nodes.NRun.Instance?.GlobalUi?.RelicInventory;
+            if (inv == null) { W("  [anchor] RelicInventory is null"); return; }
+            W($"  [anchor] RelicInventory type={inv.GetType().Name}"
+              + (inv is Control c ? $" rect={c.GetGlobalRect()} visible={c.Visible}" : " (not a Control)"));
+            if (inv is Node n)
+            {
+                int i = 0;
+                foreach (var child in n.GetChildren())
+                {
+                    string r = child is Control cc ? $"{cc.GetGlobalRect()} vis={cc.Visible}" : "(non-Control)";
+                    W($"    [anchor] child[{i++}] {child.GetType().Name} {child.Name} {r}");
+                    if (i >= 8) break;
+                }
+            }
+        }
+        catch (Exception e) { W("  [anchor] dump failed: " + e.Message); }
+    }
+
     private static List<string> Fingerprint(RunManager run)
         => run.State!.Players
               .Select(p => $"{p.NetId}=[{string.Join(",", p.Relics.Select(r => r.Id.Entry))}]")
@@ -401,6 +427,8 @@ internal static class SoloTest
         {
             var banner = MainFile.Banner;
             if (banner == null) { W("assert 9 banner: FAIL — banner was never mounted"); return false; }
+
+            DumpRelicBar();   // diagnostic: what the anchor is actually measuring
 
             banner.ShowSwaps(swaps.ConvertAll(s => (s.From, s.To)));
             await Task.Delay(900);   // let the fade-in tween settle and the layout resolve

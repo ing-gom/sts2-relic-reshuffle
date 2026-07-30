@@ -62,6 +62,7 @@ public partial class ReshuffleBanner : CanvasLayer
             ulong mine = _generation;
 
             Rebuild(swaps);
+            AnchorUnderRelicBar();
             Visible = true;
 
             _tween?.Kill();
@@ -96,6 +97,71 @@ public partial class ReshuffleBanner : CanvasLayer
             MainFile.Logger.Warn($"[{MainFile.ModId}] banner fade failed: {e.Message}");
             Visible = false;
         }
+    }
+
+    /// <summary>
+    /// Park the panel directly beneath the player's relic bar.
+    ///
+    /// ★WHY ANCHOR RATHER THAN HARDCODE. The readout explains a change that happened in the relic bar,
+    /// so it should sit next to the icons it is talking about — the eye then travels from "these icons
+    /// look different" to "here is what they were". A fixed offset only lands there on one resolution
+    /// and UI scale, so the position is read off the live inventory node and only falls back to a
+    /// constant when that node cannot be found.
+    ///
+    /// Deliberately NOT centred: combat entry is exactly when the player is reading enemy intents, and a
+    /// panel over the board would compete with the thing they actually have to act on.
+    /// </summary>
+    private void AnchorUnderRelicBar()
+    {
+        if (_panel == null) return;
+        Vector2 pos = new Vector2(FallbackX, FallbackY);
+        try
+        {
+            if (IconStripRect() is Rect2 strip)
+                pos = new Vector2(strip.Position.X, strip.End.Y + 10f);
+        }
+        catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] relic-bar anchor failed: {e.Message}"); }
+
+        // Never let the panel run off the bottom/right of the viewport on a small window.
+        try
+        {
+            Vector2 vp = GetViewport().GetVisibleRect().Size;
+            Vector2 size = _panel.Size;
+            pos.X = Mathf.Clamp(pos.X, 8f, Mathf.Max(8f, vp.X - size.X - 8f));
+            pos.Y = Mathf.Clamp(pos.Y, 8f, Mathf.Max(8f, vp.Y - size.Y - 8f));
+        }
+        catch { /* viewport unavailable — keep the computed position */ }
+
+        _panel.Position = pos;
+    }
+
+    private const float FallbackX = 24f;
+    private const float FallbackY = 112f;
+
+    /// <summary>
+    /// The rectangle the relic ICONS actually occupy, or null if it can't be determined.
+    ///
+    /// ★NOT the NRelicInventory control's own rect. Measured in game, that container reports
+    /// (12, 82) size 1684x520 — it spans most of the screen, so anchoring to its bottom edge put the
+    /// panel at y=612, halfway down the display and nowhere near the relics. Its CHILDREN are the real
+    /// strip: 68x68 holders sitting at y=82. Taking the union of the icon-sized visible children gives
+    /// the strip itself, which is what the readout should hang from.
+    /// </summary>
+    private Rect2? IconStripRect()
+    {
+        if (MegaCrit.Sts2.Core.Nodes.NRun.Instance?.GlobalUi?.RelicInventory is not Node inv) return null;
+
+        Rect2? acc = null;
+        foreach (var child in inv.GetChildren())
+        {
+            if (child is not Control c || !c.Visible) continue;
+            Rect2 r = c.GetGlobalRect();
+            // Icon-sized only. The container also holds full-width layout helpers, and folding one of
+            // those in would drag the union back to the container's own useless bounds.
+            if (r.Size.X <= 4 || r.Size.Y <= 4 || r.Size.X > 200 || r.Size.Y > 200) continue;
+            acc = acc.HasValue ? acc.Value.Merge(r) : r;
+        }
+        return acc;
     }
 
     private void Rebuild(List<(RelicModel from, RelicModel to)> swaps)

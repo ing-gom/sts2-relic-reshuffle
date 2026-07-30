@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using System.Linq;
 using MegaCrit.Sts2.Core.Context;              // LocalContext
 using MegaCrit.Sts2.Core.DevConsole;
@@ -26,25 +25,22 @@ public sealed class ReshuffleConfigSyncCmd : AbstractConsoleCmd
     public const string Verb = "rs_config";
 
     public override string CmdName => Verb;
-    public override string Args => "<enabled01> <keepStarter01> <keepAncient01> <combatOnly01> <keepForged01>";
+    public override string Args => "<includeAncient01> <includeEvent01>";
     public override string Description =>
-        "Internal (networked): the host broadcasts its Relic Reshuffle settings so every client re-rolls identically.";
+        "Internal (networked): the host broadcasts its Relic Reshuffle pool settings so every client re-rolls identically.";
     public override bool IsNetworked => true;
     public override bool DebugOnly => false;
 
     public override CmdResult Process(Player? issuingPlayer, string[] args)
     {
-        if (args.Length < 5)
+        if (args.Length < 2)
             return new CmdResult(success: false, $"Usage: {Verb} {Args}");
 
         try
         {
             HostReshuffleConfig.ApplyFromHost(
-                enabled: args[0] == "1",
-                keepStarter: args[1] == "1",
-                keepAncient: args[2] == "1",
-                combatRelevantOnly: args[3] == "1",
-                keepForged: args[4] == "1");
+                includeAncient: args[0] == "1",
+                includeEvent: args[1] == "1");
         }
         catch (Exception e)
         {
@@ -74,11 +70,8 @@ internal static class ReshuffleConfigBroadcaster
 
         string synced = string.Join(" ",
             ReshuffleConfigSyncCmd.Verb,
-            ReshuffleConfig.Enabled ? "1" : "0",
-            ReshuffleConfig.KeepStarter ? "1" : "0",
-            ReshuffleConfig.KeepAncient ? "1" : "0",
-            ReshuffleConfig.CombatRelevantOnly ? "1" : "0",
-            ReshuffleConfig.KeepForged ? "1" : "0");
+            ReshuffleConfig.IncludeAncient ? "1" : "0",
+            ReshuffleConfig.IncludeEvent ? "1" : "0");
 
         // Fired from RunManager.EnterRoom, i.e. at a room boundary and never mid-combat.
         run.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, synced, inCombat: false));

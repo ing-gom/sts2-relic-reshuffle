@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Godot;
 using MegaCrit.Sts2.Core.Modding;
 using Sts2.ModKit.Bootstrap;
@@ -15,12 +17,8 @@ public class MainFile
 {
     public const string ModId = "Sts2RelicReshuffle";
 
-    private const string KeyEnabled = "reshuffleEnabled";
-    private const string KeyKeepStarter = "keepStarter";
-    private const string KeyKeepAncient = "keepAncient";
-    private const string KeyCombatOnly = "combatRelevantOnly";
-    private const string KeyKeepForged = "keepForged";
-    private const string KeyShowBanner = "showBanner";
+    private const string KeyIncludeAncient = "includeAncient";
+    private const string KeyIncludeEvent = "includeEvent";
 
     /// <summary>The combat-start readout, mounted once on the SceneTree root so it outlives room changes.
     /// Null until the scene tree exists (and in headless test runs).</summary>
@@ -48,48 +46,67 @@ public class MainFile
 #endif
         });
 
+    /// <summary>Per-language text. English is the entry's plain Label/Description, so it is not repeated
+    /// here; "kor" matches exactly and "zh" PREFIX-matches both zhs and zht. Everything else falls back
+    /// to English — the same three-language policy the sister mods use.</summary>
+    private static Dictionary<string, string> L(string kor, string zh)
+        => new() { ["kor"] = kor, ["zh"] = zh };
+
+    /// <summary>
+    /// Attach per-language label/description to the LAST-ADDED entry by REFLECTION, never a direct call.
+    ///
+    /// ★WHY REFLECTION. ModKit resolves first-wins across every installed sister mod's bundled copy, so
+    /// on a player's machine an OLDER Sts2.ModKit without LocalizedLabels can shadow ours. A direct call
+    /// then throws MissingMethodException at JIT time and kills the WHOLE config registration — the mod
+    /// would ship with no settings at all, on exactly the machines with the most mods installed. With
+    /// reflection an old ModKit merely means the settings stay English.
+    /// See [[feedback_modkit_first_wins_version_skew]].
+    /// </summary>
+    private static void Loc(ConfigEntryBuilder b, Dictionary<string, string> labels,
+                            Dictionary<string, string> descriptions)
+    {
+        try
+        {
+            var t = b.GetType();
+            t.GetMethod("LocalizedLabels")?.Invoke(b, new object[] { labels });
+            t.GetMethod("LocalizedDescriptions")?.Invoke(b, new object[] { descriptions });
+        }
+        catch (Exception e) { Logger.Info($"[{ModId}] config localization skipped (old ModKit loaded): {e.Message}"); }
+    }
+
     private static void RegisterConfig()
     {
         // Register FIRST so a read returns the saved-or-default value — a GetValue before registration
-        // returns default(T) = 0/false for an unknown key, which for a bool silently inverts an
-        // intended-ON default. See [[feedback_modconfig_read_after_register]].
-        ModConfigBridge.For(ModId, "Relic Reshuffle", Logger)
-            .Toggle(KeyEnabled, "Enable relic reshuffle",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.Enabled = v)
-                .Description("Master switch. When ON, your relics are re-rolled every time you enter a fight; each one becomes a DIFFERENT relic of the SAME rarity, so your relic count and overall power level never change. The rolled relics stay with you until the next fight. In co-op the HOST's setting applies to everyone — relic effects are simulated on both machines, so the two players must run the same rules.")
-            .Toggle(KeyKeepStarter, "Keep starter relics",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.KeepStarter = v)
-                .Description("Pin your character's starting relic (Burning Blood and friends) so it is never re-rolled. Default ON — your starter is part of your character's identity. Turn OFF for a fully chaotic run.")
-            .Toggle(KeyKeepAncient, "Keep Ancient relics",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.KeepAncient = v)
-                .Description("Pin Ancient ('고대의 존재') relics so they are never re-rolled, and never handed out by a re-roll. Default ON — these are run-defining picks with no comparable same-rarity peers to swap between.")
-            .Toggle(KeyCombatOnly, "Only roll into combat-useful relics",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.CombatRelevantOnly = v)
-                .Description("Exclude relics that do nothing during a fight (shop discounts, campfire and reward modifiers) from the pool of relics you can be given. Default ON — without it a rare slot can land on a shop relic and read as an empty slot for the whole fight. Turn OFF for a wider, swingier pool.")
-            .Toggle(KeyKeepForged, "Keep relics you re-forged (Relic Forge)",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.KeepForged = v)
-                .Description("Pin relics you paid to re-forge or cleanse at a campfire, so a reshuffle cannot destroy work you spent gold on. Default ON. Note this counts only relics you actively invested in — Relic Forge attaches a prefix to almost everything you pick up, and pinning those would freeze your whole inventory. No effect if Relic Forge isn't installed.")
-            .Toggle(KeyShowBanner, "Show what changed at combat start",
-                defaultValue: true,
-                onChanged: v => ReshuffleConfig.ShowBanner = v)
-                .Description("Show a short panel at the start of each fight listing which relic became which. Default ON — without it the only clue is that your relic bar looks different, which asks you to have memorized it. Turn OFF for a cleaner screen. Your own setting always applies, in co-op too.")
-            .Register();
+        // returns default(T) = false for an unknown key, which for a bool silently inverts an intended-ON
+        // default. See [[feedback_modconfig_read_after_register]]. (Both defaults here are OFF, so the
+        // hazard is inert today — the ordering is kept because the next added option may not be.)
+        var b = ModConfigBridge.For(ModId, "Relic Reshuffle", Logger);
 
-        ReshuffleConfig.Enabled = ModConfigBridge.GetValue<bool>(ModId, KeyEnabled, true);
-        ReshuffleConfig.KeepStarter = ModConfigBridge.GetValue<bool>(ModId, KeyKeepStarter, true);
-        ReshuffleConfig.KeepAncient = ModConfigBridge.GetValue<bool>(ModId, KeyKeepAncient, true);
-        ReshuffleConfig.CombatRelevantOnly = ModConfigBridge.GetValue<bool>(ModId, KeyCombatOnly, true);
-        ReshuffleConfig.KeepForged = ModConfigBridge.GetValue<bool>(ModId, KeyKeepForged, true);
-        ReshuffleConfig.ShowBanner = ModConfigBridge.GetValue<bool>(ModId, KeyShowBanner, true);
+        b.Toggle(KeyIncludeAncient, "Include Ancient relics",
+            defaultValue: false,
+            onChanged: v => ReshuffleConfig.IncludeAncient = v)
+         .Description("Let Ancient relics take part in the reshuffle — they can be replaced, and a reshuffle can hand them out. Default OFF: they are run-defining picks, and most of them are rewards from the Ancient One rather than anything the relic pool normally offers. In co-op the HOST's setting applies to everyone.");
+        Loc(b,
+            L("고대의 존재 유물 포함", "包含远古遗物"),
+            L("고대의 존재 유물도 재편성에 참여시킵니다 — 교체될 수도 있고, 재편성으로 받을 수도 있습니다. 기본값 꺼짐: 런을 규정하는 유물이고, 대부분 일반 유물 풀이 아니라 고대의 존재가 주는 보상입니다. 협동 플레이에서는 호스트 설정이 모두에게 적용됩니다.",
+              "让远古遗物参与重组 — 既可能被替换，也可能通过重组获得。默认关闭：它们是决定整场游戏走向的遗物，且大多来自远古存在的奖励而非普通遗物池。多人合作中以房主的设置为准。"));
 
-        Logger.Info($"[{ModId}] enabled={ReshuffleConfig.Enabled}, keepStarter={ReshuffleConfig.KeepStarter}, " +
-                    $"keepAncient={ReshuffleConfig.KeepAncient}, combatOnly={ReshuffleConfig.CombatRelevantOnly}, " +
-                    $"keepForged={ReshuffleConfig.KeepForged}, " +
+        b.Toggle(KeyIncludeEvent, "Include event relics",
+            defaultValue: false,
+            onChanged: v => ReshuffleConfig.IncludeEvent = v)
+         .Description("Let relics that only come from events take part in the reshuffle. Default OFF: they are payoffs for specific events, so handing them out at random gives away content the run never earned. In co-op the HOST's setting applies to everyone.");
+        Loc(b,
+            L("이벤트 유물 포함", "包含事件遗物"),
+            L("이벤트로만 얻는 유물도 재편성에 참여시킵니다. 기본값 꺼짐: 특정 이벤트의 보상이라, 무작위로 지급하면 런에서 얻은 적 없는 내용을 그냥 주게 됩니다. 협동 플레이에서는 호스트 설정이 모두에게 적용됩니다.",
+              "让仅能通过事件获得的遗物参与重组。默认关闭：它们是特定事件的奖励，随机发放等于白送本局从未取得的内容。多人合作中以房主的设置为准。"));
+
+        b.Register();
+
+        ReshuffleConfig.IncludeAncient = ModConfigBridge.GetValue<bool>(ModId, KeyIncludeAncient, false);
+        ReshuffleConfig.IncludeEvent = ModConfigBridge.GetValue<bool>(ModId, KeyIncludeEvent, false);
+
+        Logger.Info($"[{ModId}] includeAncient={ReshuffleConfig.IncludeAncient}, " +
+                    $"includeEvent={ReshuffleConfig.IncludeEvent}, " +
                     $"relicForge={(RelicForgeBridge.IsPresent() ? "present" : "absent")}.");
     }
 }

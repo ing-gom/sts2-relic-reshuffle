@@ -34,16 +34,25 @@ It also makes the rules self-describing: your relic count and rarity spread are 
 
 ## Settings
 
-| Setting | Default | Notes |
-|---|---|---|
-| Enable relic reshuffle | On | In co-op the **host's** setting applies to everyone |
-| Keep starter relics | On | Your starter is part of your character |
-| Keep Ancient relics | On | Run-defining, with no comparable same-rarity peers |
-| Only roll into combat-useful relics | On | Keeps shop/campfire relics out of the pool so a slot is never dead for a fight |
-| Keep forged relics (Relic Forge) | On | A forge record lives on that specific relic; re-rolling it would destroy it |
-| Show what changed at combat start | On | Purely presentational — your own setting always applies |
+Two, both **off** by default — the mod starts at its narrowest, most predictable pool. In co-op the **host's** settings apply to everyone, because relic effects are simulated on both machines and the two sides must derive from the same rules.
 
-There is deliberately **no "how much gets re-rolled" slider**. "Some of your relics changed" makes you audit your own inventory every fight to work out which; "all of them changed" is a rule you read once. What stays fixed is chosen by category, not by a random subset.
+| Setting | Default | What it does |
+|---|---|---|
+| Include Ancient relics | Off | Ancient relics can be replaced, and can be handed out. Most of them are rewards from the Ancient One rather than pool relics, so switching this on also opens up the game's event relic pool for them. |
+| Include event relics | Off | Relics that only come from events join the pool. Off by default because handing them out at random gives away content the run never earned. |
+
+Everything else is fixed, on purpose: a setting whose other position is simply worse is noise in a settings screen.
+
+- Starter relics are always pinned — your starter *is* your character.
+- Relics you paid to re-forge or cleanse (Relic Forge) are always pinned.
+- The pool always excludes relics that do nothing in a fight, so a slot is never dead for a whole combat.
+- The readout always shows, anchored under your relic bar and fading on its own — no click, and it never covers the board.
+
+There is also deliberately **no "how much gets re-rolled" slider**. "Some of your relics changed" makes you audit your own inventory every fight to work out which; "all of them changed" is a rule you read once.
+
+## Languages
+
+Relic names in the readout come from the game's own localization, so they appear in whatever language you play in — all of them. The panel heading and the two settings ship English, Korean and Chinese, and fall back to English elsewhere (the same policy as the sister mods).
 
 ## Multiplayer
 

@@ -3,53 +3,30 @@ namespace Sts2RelicReshuffle;
 /// <summary>
 /// Live settings, mirrored out of ModConfig by <see cref="MainFile"/>.
 ///
-/// ★CO-OP: every field here feeds the deterministic re-roll (<see cref="ReshuffleService"/>), which each
-/// client derives independently instead of broadcasting. Two peers with DIFFERENT settings would derive
-/// DIFFERENT relic sets and desync the lockstep combat sim, so in real co-op the HOST's values are the
-/// ones that count — see <see cref="HostReshuffleConfig"/>, which shadows these during a networked run.
-/// Read the effective values through <c>Effective*</c> below, never the raw fields.
+/// ★DELIBERATELY TWO TOGGLES. Everything else the mod used to expose (pin starters, combat-useful only,
+/// pin re-forged relics, show the readout) had exactly one sensible value, and a setting whose other
+/// position is simply worse is noise in a settings screen. What genuinely differs between players is
+/// only how wide they want the random pool to be, so that is all that is adjustable — and both default
+/// OFF, i.e. the mod starts at its narrowest, most predictable pool.
+///
+/// ★CO-OP: both fields feed the deterministic derivation, so in a networked run the HOST's values are
+/// the ones that count — see <see cref="HostReshuffleConfig"/>. Always read through <c>Effective*</c>;
+/// a raw field read is a latent desync.
 /// </summary>
 internal static class ReshuffleConfig
 {
-    /// <summary>Master switch. OFF: relics are never re-rolled (the mod becomes inert).</summary>
-    public static bool Enabled = true;
+    /// <summary>Let Ancient ("고대의 존재") relics take part — both as something that can be replaced and
+    /// as something a re-roll can hand out. Default OFF: they are run-defining picks, and most of them
+    /// live in the game's EventRelicPool, which the mod does not otherwise read.</summary>
+    public static bool IncludeAncient = false;
 
-    /// <summary>Keep starter relics (Burning Blood etc.) fixed. Default ON — your character identity
-    /// shouldn't evaporate on the first elite.</summary>
-    public static bool KeepStarter = true;
+    /// <summary>Let event-only relics take part. Default OFF: they are rewards for specific events, so
+    /// handing them out at random gives away content the run never earned.</summary>
+    public static bool IncludeEvent = false;
 
-    /// <summary>Keep Ancient ("고대의 존재") relics fixed. Default ON — these are run-defining picks with
-    /// no same-rarity peers worth swapping between.</summary>
-    public static bool KeepAncient = true;
+    public static bool EffectiveIncludeAncient
+        => HostReshuffleConfig.UseHost ? HostReshuffleConfig.IncludeAncient : IncludeAncient;
 
-    /// <summary>Only roll INTO relics that actually do something in a fight. Default ON — without it a
-    /// rare slot can land on a shop-discount relic and read as a dead slot for the whole combat.</summary>
-    public static bool CombatRelevantOnly = true;
-
-    /// <summary>Keep relics that the sibling Sts2RelicForge mod has forged (prefix / curse) fixed.
-    /// Default ON — a forge record is attached to the relic INSTANCE, so re-rolling it silently
-    /// destroys work the player paid for.</summary>
-    public static bool KeepForged = true;
-
-    /// <summary>Show the combat-start readout listing what turned into what. Purely presentational, and
-    /// deliberately NOT host-authoritative: a peer hiding a panel cannot desync anything, so this one
-    /// stays a genuine per-player preference.</summary>
-    public static bool ShowBanner = true;
-
-    // ── Effective values ─────────────────────────────────────────────────────────────────────────
-    // Co-op client with a host broadcast in hand → the host's value. Host / single-player → our own.
-    // Every derivation input MUST be read through these; a raw field read is a latent desync.
-
-    public static bool EffectiveKeepStarter => HostReshuffleConfig.UseHost ? HostReshuffleConfig.KeepStarter : KeepStarter;
-    public static bool EffectiveKeepAncient => HostReshuffleConfig.UseHost ? HostReshuffleConfig.KeepAncient : KeepAncient;
-    public static bool EffectiveCombatRelevantOnly => HostReshuffleConfig.UseHost ? HostReshuffleConfig.CombatRelevantOnly : CombatRelevantOnly;
-    public static bool EffectiveKeepForged => HostReshuffleConfig.UseHost ? HostReshuffleConfig.KeepForged : KeepForged;
-
-    /// <summary>The master switch is host-authoritative too, and it has to be. Relic effects are
-    /// simulated in lockstep on every peer, so if one client re-rolls and another doesn't, the two
-    /// machines are running different fights — a guaranteed desync, not a preference. Host ON means
-    /// everyone gets re-rolls; a client's local toggle only decides their own single-player runs.
-    /// (A peer without the mod installed at all can't be helped from here — same rule as every other
-    /// gameplay-affecting sister mod: both players install it, or neither does.)</summary>
-    public static bool EffectiveEnabled => HostReshuffleConfig.UseHost ? HostReshuffleConfig.Enabled : Enabled;
+    public static bool EffectiveIncludeEvent
+        => HostReshuffleConfig.UseHost ? HostReshuffleConfig.IncludeEvent : IncludeEvent;
 }

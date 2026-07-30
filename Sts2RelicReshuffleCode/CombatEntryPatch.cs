@@ -71,7 +71,6 @@ internal static class CombatEntryPatch
     {
         try
         {
-            if (!ReshuffleConfig.EffectiveEnabled) return;
             if (__instance == null) return;
 
             IRunState? runState = RunManager.Instance?.State;
@@ -149,7 +148,6 @@ internal static class CombatEntryPatch
     {
         try
         {
-            if (!ReshuffleConfig.ShowBanner) return;
             var banner = MainFile.Banner;
             if (banner == null) return;
             if (Engine.GetMainLoop() is not SceneTree tree) return;

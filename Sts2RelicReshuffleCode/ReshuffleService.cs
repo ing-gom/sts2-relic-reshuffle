@@ -4,7 +4,7 @@ using System.Linq;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Relics;      // RelicRarity
 using MegaCrit.Sts2.Core.Models;               // RelicModel, ModelDb
-using MegaCrit.Sts2.Core.Models.RelicPools;    // SharedRelicPool
+using MegaCrit.Sts2.Core.Models.RelicPools;    // SharedRelicPool, EventRelicPool
 using MegaCrit.Sts2.Core.Runs;                 // IRunState
 
 namespace Sts2RelicReshuffle;
@@ -74,8 +74,9 @@ internal static class ReshuffleService
         // Snapshot first: the loop below mutates player.Relics. EVERY eligible relic is replaced —
         // a partial reshuffle is deliberately not offered, because "some of your relics changed" makes
         // the player audit their own inventory every fight to find out which ones, while "all of them
-        // changed" is a rule you read once. What stays fixed is decided by the pin toggles (starter /
-        // Ancient / stackable / forged), which name a CATEGORY rather than a random subset.
+        // changed" is a rule you read once. What stays fixed is decided by CATEGORY (starters, relics
+        // the player paid to re-forge, and — unless a setting opens them up — Ancient and event relics),
+        // never by a random subset.
         var sources = player.Relics.Where(r => IsSwappableSource(r, player)).ToList();
         if (sources.Count == 0) return swaps;
 
@@ -223,8 +224,9 @@ internal static class ReshuffleService
     /// <summary>
     /// Whether an owned relic may be rolled AWAY. Each rejection below is a concrete failure mode:
     ///
-    ///   · <b>Starter / Ancient</b> — configurable, both default to fixed. Starters ARE the character;
-    ///     Ancients are run-defining and have no meaningful same-rarity peer set.
+    ///   · <b>Starter</b> — always fixed. The starter relic IS the character.
+    ///   · <b>Ancient / Event</b> — fixed unless the matching setting opts them in. Ancients are
+    ///     run-defining; event relics are rewards a specific event handed over.
     ///   · <b>Wax</b> — a wax relic is on a melt countdown. Swapping a live one for a permanent relic is
     ///     a free upgrade, and swapping a melted one launders a corpse into a working relic.
     ///   · <b>Melted</b> — already dead; the game filters it out of hook dispatch. Reviving it as a live
@@ -233,8 +235,9 @@ internal static class ReshuffleService
     ///     its host on load. Removing one duplicates a relic on the next load. See
     ///     [[project_sts2_relic_forge]]; RelicForge excludes companions from every player.Relics scan
     ///     and so must we.
-    ///   · <b>RelicForge forged</b> — configurable. The forge record lives on the relic INSTANCE, so a
-    ///     re-roll silently destroys a prefix the player paid gold for.
+    ///   · <b>RelicForge re-forged / cleansed</b> — the player spent gold on that specific instance, and
+    ///     a re-roll would destroy it. Note this is INVESTMENT, not "has a forge record": RelicForge
+    ///     attaches a record to nearly every pickup, and pinning those froze whole inventories.
     ///   · <b>Non-vanilla</b> — see <see cref="GameAssembly"/>; deleting another mod's relic is not ours
     ///     to do.
     /// </summary>
@@ -247,12 +250,11 @@ internal static class ReshuffleService
         // rule. This is what keeps CIRCLET out (it is the None-rarity stackable) — worth naming,
         // because it is also why the stack carry-over below can never actually fire today.
         if (r.Rarity == RelicRarity.None) return false;
-        // Event relics are excluded on purpose, matching the target pool (see BuildTargetPool).
-        if (r.Rarity == RelicRarity.Event) return false;
-        if (r.Rarity == RelicRarity.Starter && ReshuffleConfig.EffectiveKeepStarter) return false;
-        if (r.Rarity == RelicRarity.Ancient && ReshuffleConfig.EffectiveKeepAncient) return false;
+        if (r.Rarity == RelicRarity.Starter) return false;
+        if (r.Rarity == RelicRarity.Ancient && !ReshuffleConfig.EffectiveIncludeAncient) return false;
+        if (r.Rarity == RelicRarity.Event && !ReshuffleConfig.EffectiveIncludeEvent) return false;
         if (RelicForgeBridge.IsCompanion(r)) return false;
-        if (ReshuffleConfig.EffectiveKeepForged && RelicForgeBridge.IsPlayerInvested(r)) return false;
+        if (RelicForgeBridge.IsPlayerInvested(r)) return false;
         return true;
     }
 
@@ -269,10 +271,18 @@ internal static class ReshuffleService
         var result = new Dictionary<RelicRarity, List<RelicModel>>();
         try
         {
+            bool includeAncient = ReshuffleConfig.EffectiveIncludeAncient;
+            bool includeEvent = ReshuffleConfig.EffectiveIncludeEvent;
+
             var candidates = ModelDb.RelicPool<SharedRelicPool>().GetUnlockedRelics(player.UnlockState)
                 .Concat(player.Character.RelicPool.GetUnlockedRelics(player.UnlockState));
 
-            bool combatOnly = ReshuffleConfig.EffectiveCombatRelevantOnly;
+            // ★The Ancient / Event toggles have to reach EventRelicPool to mean anything. Measured:
+            // that pool holds 94 Ancient + 32 Event relics, while SharedRelicPool contributes only
+            // 2 Ancient + 1 Event. Widening the rarity filter alone would leave both options almost
+            // inert, so the pool itself is widened when either is switched on.
+            if (includeAncient || includeEvent)
+                candidates = candidates.Concat(ModelDb.RelicPool<EventRelicPool>().GetUnlockedRelics(player.UnlockState));
 
             foreach (RelicModel proto in candidates)
             {
@@ -280,14 +290,13 @@ internal static class ReshuffleService
                 if (proto.GetType().Assembly != GameAssembly) continue;
                 if (proto.Rarity == RelicRarity.None) continue;
                 if (proto.Rarity == RelicRarity.Starter) continue;   // never minted by a re-roll
-                if (proto.Rarity == RelicRarity.Ancient && ReshuffleConfig.EffectiveKeepAncient) continue;
-                // ★Event relics are never handed out. Most live in EventRelicPool, which this method
-                // does not read — but FRESNEL_LENS sits in SharedRelicPool, so without this line it
-                // becomes a legal target the moment "combat-useful only" is switched off. It was being
-                // filtered incidentally, which is not the same as being excluded.
-                if (proto.Rarity == RelicRarity.Event) continue;
+                if (proto.Rarity == RelicRarity.Ancient && !includeAncient) continue;
+                // ★FRESNEL_LENS is an Event relic sitting in SharedRelicPool, so this filter is load
+                // bearing even though EventRelicPool is only read when a toggle asks for it. Without
+                // it, that one relic leaks in regardless of the setting.
+                if (proto.Rarity == RelicRarity.Event && !includeEvent) continue;
                 if (!RelicClassifier.IsValidTarget(proto)) continue;
-                if (combatOnly && !RelicClassifier.HasCombatValue(proto)) continue;
+                if (!RelicClassifier.HasCombatValue(proto)) continue;
                 if (!proto.IsAllowed(runState)) continue;
 
                 if (!result.TryGetValue(proto.Rarity, out var bucket))
