@@ -999,20 +999,33 @@ internal static class SoloTest
               + $"{symmetric} (want True)"
               + (oneWay.Count > 0 ? " — " + string.Join(",", oneWay.Take(8)) : ""));
 
-            // 20b: whichever custom relics DO qualify must be reachable from both ends, so report the
-            // two sides side by side rather than asserting a zero that no longer means anything.
-            int customSource = custom.Count(r => { try { return ReshuffleService.IsSwappableSource(r, player); } catch { return false; } });
+            // 20b/20c: another mod's relic is untouched at BOTH ends — never taken, never handed out.
+            // Two independently written filters do this (IsSwappableSource for what leaves, the pool
+            // builder for what arrives), so either could rot alone while the other keeps the tests green.
+            var swappable = new List<string>();
+            foreach (var r in custom)
+            {
+                bool can;
+                try { can = ReshuffleService.IsSwappableSource(r, player); }
+                catch { can = false; }
+                if (can) swappable.Add(r.Id.Entry);
+            }
+            bool keptSafe = swappable.Count == 0;
+            W($"assert 20b no custom relic can be swapped AWAY (you keep what that mod gave you): "
+              + $"{swappable.Count} swappable = {keptSafe} (want True)"
+              + (swappable.Count > 0 ? " — " + string.Join(",", swappable.Take(8)) : ""));
+
             var inPool = new List<string>();
             foreach (var rarity in new[] { RelicRarity.Common, RelicRarity.Uncommon,
                                            RelicRarity.Rare, RelicRarity.Shop })
                 foreach (var r in ReshuffleService.TargetPoolForTest(player, rarity))
                     if (r.GetType().Assembly != game) inPool.Add(r.Id.Entry);
-            bool consistent = customSource == inPool.Distinct().Count();
-            W($"assert 20b custom relics in/out agree: {customSource} swappable vs {inPool.Distinct().Count()} "
-              + $"in the pool = {consistent} (want True) — this run's character is "
-              + $"{player.Character?.Id.Entry}, and the pool is character-scoped by the game's own rule");
+            bool outOfPool = inPool.Count == 0;
+            W($"assert 20c no custom relic is in the random pool: {inPool.Distinct().Count()} = "
+              + $"{outOfPool} (want True)"
+              + (inPool.Count > 0 ? " — " + string.Join(",", inPool.Distinct().Take(8)) : ""));
 
-            return symmetric && consistent;
+            return symmetric && keptSafe && outOfPool;
         }
         catch (Exception e) { W("assert 20 modded relics THREW: " + e.Message); return false; }
     }

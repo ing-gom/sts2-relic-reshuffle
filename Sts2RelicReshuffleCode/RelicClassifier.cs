@@ -26,45 +26,36 @@ namespace Sts2RelicReshuffle;
 /// </summary>
 internal static class RelicClassifier
 {
-    private static readonly Dictionary<Type, bool> _eligible = new();
-
     /// <summary>
     /// May this relic take part in the shuffle at all?
     ///
-    /// ★VANILLA: ALWAYS. Every vanilla relic has been accounted for by hand — the ones that end up inert
-    /// when granted silently are enumerated and marked in their tooltip.
+    /// ★VANILLA ONLY. Every vanilla relic has been accounted for by hand — the ones that end up inert
+    /// when granted silently are enumerated and marked in their tooltip. Another mod's relic is left
+    /// alone entirely: it is never handed out and, just as importantly, never taken away. Earn one from
+    /// the mod that added it and it stays yours for the run.
     ///
-    /// ★★ANOTHER MOD'S RELIC: ONLY IF ITS PICKUP DOES NOTHING. The reshuffle grants through
-    /// <c>AddRelicInternal</c>, so a relic's <c>AfterObtained</c> never runs. For vanilla that is a known,
-    /// countable cost. For third-party relics it is not auditable: Fur Coat is the in-house proof that
-    /// skipped obtain-time setup can leave a relic permanently broken (its act index stays -1 and every
-    /// later hook no-ops), and a modded relic could fail in ways that are not merely inert. A relic that
-    /// declares no <c>AfterObtained</c> has no setup to skip, so that entire failure mode is gone rather
-    /// than merely unlikely.
+    /// ★WHY NOT THE NARROWER RULE. A version of this allowed modded relics whose pickup does nothing,
+    /// on the theory that the only hazard was skipped obtain-time setup — the reshuffle grants through
+    /// <c>AddRelicInternal</c>, so <c>AfterObtained</c> never runs, and vanilla's Fur Coat is the in-house
+    /// proof that this can leave a relic permanently broken (its act index stays -1 and every later hook
+    /// no-ops). That rule was measurable and it worked. It was dropped anyway, because "the relic that
+    /// mod gave you is still there next fight" is a promise worth more than the extra variety, and
+    /// because obtain-time setup is only the hazard we can SEE in third-party code.
     ///
-    /// Measured on the current install: 153 of 450 relics are custom, and 102 of them qualify.
+    /// Measured on the current install: 153 of 450 relics are custom, so this is not a rounding error —
+    /// it is a deliberate trade of pool size for not touching other mods' content at all.
     /// </summary>
     public static bool IsShuffleEligible(RelicModel relic)
     {
         if (relic == null) return false;
-        Type t = relic.GetType();
-        if (_eligible.TryGetValue(t, out bool cached)) return cached;
-
-        bool ok;
-        try
-        {
-            ok = t.Assembly == typeof(RelicModel).Assembly || !SpentRewardLedger.HasPickupPayload(relic);
-        }
+        try { return relic.GetType().Assembly == typeof(RelicModel).Assembly; }
         catch (Exception e)
         {
-            // Fail CLOSED for foreign code: leaving a modded relic out costs variety, letting a broken
-            // one in costs the other mod's correctness.
-            MainFile.Logger.Warn($"[{MainFile.ModId}] eligibility probe failed for {t.Name}: {e.Message}");
-            ok = false;
+            // Fail CLOSED for foreign code: leaving a relic out costs variety, taking one we should not
+            // have costs another mod's content.
+            MainFile.Logger.Warn($"[{MainFile.ModId}] eligibility probe failed: {e.Message}");
+            return false;
         }
-
-        _eligible[t] = ok;
-        return ok;
     }
 
     private static readonly Dictionary<Type, bool> _combatValue = new();
