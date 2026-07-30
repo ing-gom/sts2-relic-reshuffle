@@ -240,6 +240,10 @@ internal static class SoloTest
             bool reentry = CheckReentry(run);
             if (!reentry) ok = false;
 
+            // ── 14. a relic you already hold is never offered ───────────────────────────────────
+            bool offers = CheckOfferFilter(player);
+            if (!offers) ok = false;
+
             // ── 13. the top-bar button is hidden until a reshuffle happens ──────────────────────
             bool btn = CheckButtonVisibility();
             if (!btn) ok = false;
@@ -504,6 +508,58 @@ internal static class SoloTest
             if (r != null) return r;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Draw relics the way a shop does and prove none of them is one the player already holds.
+    ///
+    /// ★WHAT THIS PROTECTS. The game keeps "never offer a relic you own" by REMOVING the relic from the
+    /// grab bag inside RelicCmd.Obtain — the draw filter itself is `_ => true` and never looks at
+    /// ownership. This mod grants relics through AddRelicInternal, which skips that removal, so without
+    /// the offer filter a reshuffled-in relic stays in the pool and a later shop can sell you a second
+    /// copy of something you are holding.
+    ///
+    /// Drives RelicFactory directly: that is the single funnel every shop / treasure / reward draw goes
+    /// through, and it consumes real bag entries, so this runs late and on a run that is being discarded.
+    /// </summary>
+    private static bool CheckOfferFilter(Player player)
+    {
+        try
+        {
+            var owned = new HashSet<string>(player.Relics.Select(r => r.Id.Entry), StringComparer.Ordinal);
+            if (owned.Count == 0) { W("assert 14 offer filter: SKIPPED (player owns nothing)"); return true; }
+
+            var offered = new List<string>();
+            foreach (var rarity in new[] { RelicRarity.Common, RelicRarity.Uncommon, RelicRarity.Rare })
+                for (int i = 0; i < 6; i++)
+                {
+                    var r = MegaCrit.Sts2.Core.Factories.RelicFactory.PullNextRelicFromFront(player, rarity);
+                    if (r != null) offered.Add(r.Id.Entry);
+                }
+
+            var collisions = offered.Where(e => owned.Contains(e)).Distinct(StringComparer.Ordinal).ToList();
+            bool clean = offered.Count > 0 && collisions.Count == 0;
+            W($"assert 14a no owned relic offered: {clean} (want True) — {offered.Count} draw(s), owned {owned.Count}"
+              + (collisions.Count > 0 ? $"  ★OFFERED WHILE OWNED: {string.Join(", ", collisions)}" : ""));
+
+            // ★14a alone could pass by luck: it draws 18 times from deques holding 20-35 entries, so
+            // missing every owned relic is entirely possible even with no filter at all. This checks the
+            // MECHANISM directly — the filter must reject a relic the player is holding — so the pair is
+            // not vacuous. (Twice this session an assert "passed" while proving nothing.)
+            var sample = player.Relics.FirstOrDefault(r => r.Rarity != RelicRarity.None);
+            var filter = RelicOfferFilterPatch.FilterForTest(player);
+            bool rejects = sample != null && !filter(sample.CanonicalInstance ?? sample);
+            W($"assert 14b filter rejects the owned relic {sample?.Id.Entry ?? "(none)"}: {rejects} (want True)");
+
+            // And it must NOT reject something the player does not hold, or every draw would degrade.
+            var unowned = ReshuffleService.TargetPoolForTest(player, RelicRarity.Rare)
+                                         .FirstOrDefault(r => !owned.Contains(r.Id.Entry));
+            bool accepts = unowned == null || filter(unowned);
+            W($"assert 14c filter accepts the unowned relic {unowned?.Id.Entry ?? "(none)"}: {accepts} (want True)");
+
+            return clean && rejects && accepts;
+        }
+        catch (Exception e) { W("assert 14 offer filter THREW: " + e.Message); return false; }
     }
 
     private static List<string> Fingerprint(RunManager run)
