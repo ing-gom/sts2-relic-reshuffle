@@ -6,14 +6,14 @@ using MegaCrit.Sts2.Core.Models;   // RelicModel
 namespace Sts2RelicReshuffle;
 
 /// <summary>
-/// The reshuffle log: a full-screen overlay listing every reshuffle this run, newest fight first.
-/// Opened from the top-bar button (<see cref="NReshuffleSummaryButton"/>), closed by its X, the same
+/// The reshuffle log: a full-screen overlay showing what THIS fight's reshuffle changed.
+/// Opened from the top-bar button (<see cref="NReshuffleSummaryButton"/>), closed by its button, the
 /// close button, or Escape.
 ///
 /// ★WHY THIS REPLACED THE AUTO-BANNER. The old readout appeared on its own and faded after five
 /// seconds, anchored beneath the relic bar. The relic bar grows all run and eventually wraps, so there
 /// was no stable place to anchor to — and a message that disappears is no use to someone who looked
-/// away. Opening a list on demand fixes both, and lets the player compare against earlier fights.
+/// away. Opening it on demand fixes both.
 /// Modelled on Sts2RelicForge's forge summary so the two mods present the same way.
 ///
 /// ★NO _Process. Built when opened, freed when closed; nothing ticks while it is shut.
@@ -88,26 +88,28 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
         // Height follows the content up to a cap, past which the ScrollContainer takes over — a fixed
         // tall frame around three rows reads as broken, and an uncapped one runs off the screen once a
         // long run has twenty fights recorded.
-        int lines = 0;
-        foreach (var e in ReshuffleHistory.Entries) lines += 1 + e.Swaps.Count;
-        if (lines == 0) lines = 1;
-        float w = Mathf.Min(760f, vp.X - 120f);
-        float chrome = 150f;                                   // title + close row + margins
-        float h = Mathf.Clamp(chrome + lines * 30f, 220f, Mathf.Min(680f, vp.Y - 160f));
+        var current = ReshuffleHistory.Current;
+        int lines = current == null ? 1 : 1 + current.Swaps.Count;
+        // Sized as a FRACTION of the viewport, not in fixed pixels: this is a reading surface — relic
+        // names run long in Korean and Chinese, and a narrow box wraps them into an unreadable column.
+        float w = Mathf.Clamp(vp.X * 0.58f, 640f, 1100f);
+        float chrome = 190f;                                   // title + close row + margins
+        float maxH = Mathf.Min(vp.Y * 0.78f, 860f);
+        float h = Mathf.Clamp(chrome + lines * RowHeight, 340f, maxH);
         frame.Size = new Vector2(w, h);
         frame.Position = new Vector2((vp.X - w) / 2f, (vp.Y - h) / 2f);
         AddChild(frame);
 
         var margin = new MarginContainer();
         foreach (var side in new[] { "margin_left", "margin_right", "margin_top", "margin_bottom" })
-            margin.AddThemeConstantOverride(side, 18);
+            margin.AddThemeConstantOverride(side, 26);
         frame.AddChild(margin);
 
         var root = new VBoxContainer();
-        root.AddThemeConstantOverride("separation", 10);
+        root.AddThemeConstantOverride("separation", 14);
         margin.AddChild(root);
 
-        var title = MakeLabel(Loc.Title, 26);
+        var title = MakeLabel(Loc.Title, 32);
         title.HorizontalAlignment = HorizontalAlignment.Center;
         title.AddThemeColorOverride("font_color", Gold);
         root.AddChild(title);
@@ -124,39 +126,33 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
         root.AddChild(scroll);
 
         var list = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        list.AddThemeConstantOverride("separation", 12);
+        list.AddThemeConstantOverride("separation", 18);
         scroll.AddChild(list);
 
-        var history = ReshuffleHistory.Entries;
-        if (history.Count == 0)
+        if (current == null)
         {
-            var empty = MakeLabel(Loc.Empty, 17);
+            var empty = MakeLabel(Loc.Empty, 20);
             empty.HorizontalAlignment = HorizontalAlignment.Center;
             empty.AddThemeColorOverride("font_color", new Color(0.72f, 0.72f, 0.72f));
             list.AddChild(empty);
         }
-        else
-        {
-            for (int i = 0; i < history.Count; i++)
-                list.AddChild(MakeFloorBlock(history[i], newest: i == 0));
-        }
+        else list.AddChild(MakeFloorBlock(current));
 
-        var close = new Button { Text = Loc.Close, CustomMinimumSize = new Vector2(160, 40) };
+        var close = new Button { Text = Loc.Close, CustomMinimumSize = new Vector2(200, 50) };
         close.Pressed += Close;
         var closeRow = new HBoxContainer { Alignment = BoxContainer.AlignmentMode.Center };
         closeRow.AddChild(close);
         root.AddChild(closeRow);
     }
 
-    /// <summary>One fight's block: a floor heading, then its "old → new" rows.</summary>
-    private static Control MakeFloorBlock(ReshuffleHistory.Entry entry, bool newest)
+    /// <summary>This fight's block: a floor heading, then its "old → new" rows.</summary>
+    private static Control MakeFloorBlock(ReshuffleHistory.Entry entry)
     {
         var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 4);
+        box.AddThemeConstantOverride("separation", 7);
 
-        string heading = string.Format(Loc.FloorFormat, entry.Floor) + (newest ? "  " + Loc.ThisFight : "");
-        var head = MakeLabel(heading, 18);
-        head.AddThemeColorOverride("font_color", newest ? Gold : new Color(0.66f, 0.66f, 0.66f));
+        var head = MakeLabel(string.Format(Loc.FloorFormat, entry.Floor), 22);
+        head.AddThemeColorOverride("font_color", Gold);
         box.AddChild(head);
 
         foreach (var (from, to) in entry.Swaps)
@@ -169,23 +165,23 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
     private static Control MakeRow(RelicModel from, RelicModel to)
     {
         var row = new HBoxContainer();
-        row.AddThemeConstantOverride("separation", 6);
+        row.AddThemeConstantOverride("separation", 9);
 
         var oldIcon = MakeIcon(from);
         oldIcon.Modulate = new Color(1f, 1f, 1f, 0.55f);
         row.AddChild(oldIcon);
 
-        var oldName = MakeLabel(TitleOf(from), 16);
+        var oldName = MakeLabel(TitleOf(from), 20);
         oldName.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
         row.AddChild(oldName);
 
-        var arrow = MakeLabel("→", 18);
+        var arrow = MakeLabel("→", 23);
         arrow.AddThemeColorOverride("font_color", Gold);
         row.AddChild(arrow);
 
         row.AddChild(MakeIcon(to));
 
-        var newName = MakeLabel(TitleOf(to), 16);
+        var newName = MakeLabel(TitleOf(to), 20);
         newName.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         row.AddChild(newName);
 
@@ -202,7 +198,7 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
             ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
         };
-        rect.CustomMinimumSize = new Vector2(34, 34);
+        rect.CustomMinimumSize = new Vector2(IconSize, IconSize);
         try { rect.Texture = relic.Icon; }
         catch (Exception e) { MainFile.Logger.Warn($"[{MainFile.ModId}] icon load failed for {relic.Id.Entry}: {e.Message}"); }
         return rect;
@@ -225,6 +221,12 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
         }
         catch { return relic.Id.Entry; }
     }
+
+    /// <summary>Icon box and the per-line height the frame budgets for. Kept together because the
+    /// height estimate must track the icon size — they drifted apart once and the frame came out too
+    /// short for its own rows.</summary>
+    private const int IconSize = 46;
+    private const float RowHeight = 52f;
 
     private static readonly Color Gold = new(1f, 0.86f, 0.35f);
 
@@ -295,10 +297,9 @@ internal sealed partial class NReshuffleSummaryPanel : CanvasLayer
             return en;
         }
 
-        public static string Title => Pick("Relic Reshuffle log", "유물 재편성 기록", "遗物重组记录");
-        public static string Empty => Pick("No reshuffle yet this run.", "이번 런에서는 아직 재편성이 없습니다.", "本局尚未发生重组。");
+        public static string Title => Pick("This fight's reshuffle", "이번 전투의 재편성", "本场战斗的重组");
+        public static string Empty => Pick("Nothing was reshuffled for this fight.", "이번 전투에서는 재편성된 유물이 없습니다.", "本场战斗没有重组任何遗物。");
         public static string FloorFormat => Pick("Floor {0}", "{0}층", "第 {0} 层");
-        public static string ThisFight => Pick("(this fight)", "(이번 전투)", "（本场战斗）");
         public static string Close => Pick("Close", "닫기", "关闭");
     }
 }

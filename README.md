@@ -15,9 +15,9 @@ Rarity is preserved: a common becomes a different common, a rare becomes a diffe
 | **How long** | Until the next fight re-rolls them |
 | **Pinned** | Starter relics, relics you paid to re-forge or cleanse, and — unless you opt them in — Ancient and event relics |
 
-A **⇄ button in the top bar** (next to map / deck / pause) opens the reshuffle log: every fight this run, newest first, showing which relic became which with both icons and names. The button pulses gold when a new reshuffle lands, so you notice without anything covering the board.
+A **⇄ button in the top bar** (next to map / deck / pause) shows what this fight's reshuffle changed — which relic became which, with both icons and names. The button pulses gold when a new reshuffle lands, so you notice without anything covering the board.
 
-An earlier version popped the list up automatically and faded it after a few seconds, anchored under the relic bar. That was dropped for two reasons: a message that disappears is no use if you looked away, and the relic bar *grows* through a run — it eventually wraps — so there is no stable place to anchor to. A list you open when you want has neither problem, and it can answer a question the pop-up never could: what did I have three fights ago?
+An earlier version popped the list up automatically and faded it after a few seconds, anchored under the relic bar. That was dropped for two reasons: a message that disappears is no use if you looked away, and the relic bar *grows* through a run — it eventually wraps — so there is no stable place to anchor to. Opening it on demand has neither problem.
 
 ## Why rarity-preserving
 

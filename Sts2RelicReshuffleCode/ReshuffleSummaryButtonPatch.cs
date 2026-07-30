@@ -10,7 +10,8 @@ using MegaCrit.Sts2.Core.Nodes.HoverTips;      // NHoverTipSet
 namespace Sts2RelicReshuffle;
 
 /// <summary>
-/// Puts the reshuffle-log trigger in the top bar's right-hand button cluster (map / deck / pause).
+/// Puts the "what changed this fight" trigger in the top bar's right-hand button cluster
+/// (map / deck / pause).
 ///
 /// ★WHY THE TOP BAR. The readout used to be anchored under the relic bar, which grows all run and
 /// eventually wraps — there is no stable spot down there. The top-bar cluster is fixed for the whole
@@ -157,11 +158,11 @@ internal sealed partial class NReshuffleSummaryButton : TextureButton
         string l = TryLocale();
         bool ko = l.StartsWith("ko"), zh = l.StartsWith("zh");
         var t = new HoverTip();   // setters reachable — ModKit publicizes sts2
-        t.Title = ko ? "유물 재편성 기록" : zh ? "遗物重组记录" : "Relic Reshuffle log";
+        t.Title = ko ? "이번 전투의 재편성" : zh ? "本场战斗的重组" : "This fight's reshuffle";
         t.Description = ko
-            ? "이번 런에서 전투마다 어떤 유물이 무엇으로 바뀌었는지 봅니다."
-            : zh ? "查看本局每场战斗中哪些遗物变成了什么。"
-                 : "See which relic became which, fight by fight, this run.";
+            ? "이번 전투에 들어오면서 어떤 유물이 무엇으로 바뀌었는지 봅니다."
+            : zh ? "查看进入本场战斗时哪些遗物变成了什么。"
+                 : "See which relic became which when you entered this fight.";
         t.Id = "sts2rr_summary_btn";
         return t;
     }
