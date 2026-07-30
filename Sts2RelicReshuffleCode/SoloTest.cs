@@ -262,6 +262,10 @@ internal static class SoloTest
             bool deckSafe = await CheckPermanentDeckPayload(player);
             if (!deckSafe) ok = false;
 
+            // ── 20. every custom relic, from every other mod, is out on BOTH ends ───────────────
+            bool modded = CheckModdedRelicsExcluded(player);
+            if (!modded) ok = false;
+
             // ── 14. a relic you already hold is never offered ───────────────────────────────────
             bool offers = CheckOfferFilter(player);
             if (!offers) ok = false;
@@ -933,6 +937,74 @@ internal static class SoloTest
             return firstUpgraded && suppressed && complete && locked;
         }
         catch (Exception e) { W("assert 19 permanent deck payload THREW: " + e.Message); return false; }
+    }
+
+    /// <summary>
+    /// No relic from another mod is ever swapped away or handed out.
+    ///
+    /// ★WHY BOTH ENDS, AND WHY ALL OF THEM. Assert 19d only looked at modded relics that carry a pickup
+    /// payload, which is a slice of the installed set — it established that the re-buy loop cannot reach
+    /// them, not that they are excluded at all. Two separate filters do the excluding
+    /// (<c>IsSwappableSource</c> for what leaves, the pool builder for what arrives) and they are written
+    /// independently, so either could rot on its own while the other keeps the tests green.
+    ///
+    /// ★WHAT GOES WRONG IF ONE ROTS. Taking another mod's relic away deletes state it owns and may have
+    /// serialized. Handing one over is worse: we grant through AddRelicInternal, so any obtain-time setup
+    /// that relic does never runs, and third-party code cannot be audited for whether it survives that.
+    /// The vanilla Fur Coat is the in-house example — granted silently, its act index stays -1 and the
+    /// relic is permanently inert. A modded relic could fail less quietly.
+    ///
+    /// This assert is also the inventory: it reports how many custom relics the installed set actually
+    /// contributes, so "is my mod's relic in the shuffle?" has a measured answer rather than a guess.
+    /// </summary>
+    private static bool CheckModdedRelicsExcluded(Player player)
+    {
+        try
+        {
+            var game = typeof(RelicModel).Assembly;
+            var all = FlatModels().OfType<RelicModel>()
+                .GroupBy(r => r.Id.Entry).Select(g => g.First()).ToList();
+            var custom = all.Where(r => r.GetType().Assembly != game).ToList();
+            if (custom.Count == 0)
+            {
+                W("assert 20 modded relics: SKIPPED (no custom relics installed — nothing to exclude)");
+                return true;
+            }
+
+            // Which other assemblies are actually contributing, so the number is traceable.
+            var byAsm = custom.GroupBy(r => r.GetType().Assembly.GetName().Name)
+                              .OrderByDescending(g => g.Count())
+                              .Select(g => $"{g.Key}:{g.Count()}");
+            W($"assert 20 custom relics found: {custom.Count} of {all.Count} — {string.Join(" ", byAsm)}");
+
+            var swappable = new List<string>();
+            foreach (var r in custom)
+            {
+                bool can;
+                try { can = ReshuffleService.IsSwappableSource(r, player); }
+                catch { can = false; }
+                if (can) swappable.Add(r.Id.Entry);
+            }
+            bool outAsSource = swappable.Count == 0;
+            W($"assert 20a no custom relic can be swapped AWAY: {swappable.Count} swappable = "
+              + $"{outAsSource} (want True)"
+              + (swappable.Count > 0 ? " — " + string.Join(",", swappable.Take(8)) : ""));
+
+            // The target side is the pool builder, a completely separate filter — check every rarity the
+            // pool stocks, not just one, or a leak in a single bucket would go unseen.
+            var leaked = new List<string>();
+            foreach (var rarity in new[] { RelicRarity.Common, RelicRarity.Uncommon,
+                                           RelicRarity.Rare, RelicRarity.Shop })
+                foreach (var r in ReshuffleService.TargetPoolForTest(player, rarity))
+                    if (r.GetType().Assembly != game) leaked.Add($"{r.Id.Entry}({rarity})");
+            bool outAsTarget = leaked.Count == 0;
+            W($"assert 20b no custom relic can be handed OUT: {leaked.Count} in the pool = "
+              + $"{outAsTarget} (want True)"
+              + (leaked.Count > 0 ? " — " + string.Join(",", leaked.Take(8)) : ""));
+
+            return outAsSource && outAsTarget;
+        }
+        catch (Exception e) { W("assert 20 modded relics THREW: " + e.Message); return false; }
     }
 
     /// <summary>Render a string so a cp949 console cannot silently drop the part that matters.</summary>
